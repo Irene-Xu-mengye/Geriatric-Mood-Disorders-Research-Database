@@ -1,0 +1,1407 @@
+---
+title: "Variability Check (part 1)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: yeti
+    code_folding: hide
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+# 1. Load packages, Import data, Set style
+```{r, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.width = 5, fig.height = 4)
+library(tidyverse)
+library(ggplot2)
+library(Rmisc)
+library(ggpubr)
+library(EnvStats) # show n in ggplot
+
+df_long <- read_csv("data/GMDD_TMB_long_2021-08-17.csv") %>%
+  filter(!(visit %in% c("3t_mri", "4t_mri"))) %>%
+  mutate(visit = as.numeric(visit))
+
+gmdd_long <- read_csv("data/GMDD_tidy_long_2021-08-17.csv")
+```
+
+***
+
+# 2. Create functions
+```{r score_bar}
+## this function plots a distribution histogram for each variable ********
+score_bar <- function(data, var, vtitle, w = 1, a = 0.8) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = var, fill = arm)) + 
+    geom_histogram(position = 'dodge2', alpha = a, binwidth = w) +
+    theme_minimal() +
+    xlab("")  +
+    ggtitle(vtitle)
+}
+```
+
+```{r score_by_group}
+score_group <- function(data, var, vtitle, s = 4, a = 0.6) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(x = "", y = "") +
+    ggtitle(vtitle) + 
+    stat_n_text() 
+}
+```
+
+```{r score_by_visit}
+score_by_visit <- function(data, var, vtitle, s = 0.5, a = 0.5) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(x = "", y = "") +
+    ggtitle(vtitle) + 
+    stat_n_text(size = 2) +
+    facet_wrap(~visit, scales = "free")
+}
+```
+
+```{r plot_within}
+## this function creates a line graph for each individual ****************
+plot_within <- function (data, fun.y, vtitle) {
+  data$fun.y <- data[, fun.y]
+  data$fun.y <- unlist(data$fun.y)
+  ggplot(data, aes(as.numeric(visit), fun.y, group = record_id, color = record_id)) +
+    geom_line(alpha = 0.6) +
+    theme_bw() +
+    theme(legend.position = "None") +
+    labs(title = vtitle)  +
+    ylab("") +
+    xlab("visit") + 
+    stat_n_text(size = 3)
+}
+```
+
+```{r plot_within_sd}
+## this function returns the overall sd for a variable *****************
+sd_all <- function(data, var) {
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd(data$var, na.rm = TRUE)
+}
+
+# this function plots the distribution of within-subject sd for a variable, 
+# and also plots the overall sd ****************************************
+plot_within_sd <- function(data, var, vtitle) {
+  sd_var <- sd_all(data, var)
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd_within_data <- data %>% group_by(record_id) %>% dplyr::summarize(sd = sd(var, na.rm = TRUE))
+  ggplot(sd_within_data, aes(sd)) + geom_density(color = "deepskyblue4", fill = "deepskyblue4", alpha = 0.7) +
+    geom_vline(data = data, xintercept = sd_var, color = "deepskyblue4") +
+    theme_minimal() +
+    ggtitle(vtitle) 
+}
+```
+
+```{r trend_by_group}
+# this function plots the mean of a variable for each visit for each group
+trend_by_group <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  summary <- summarySE(data, measurevar = fun.y, groupvars = c("arm", "visit"), na.rm = TRUE)
+  summary$fun.y = unlist(summary[, fun.y])
+  ggplot(summary, aes(x = visit, y = fun.y, color = arm)) +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4)+
+    geom_line(position = position_dodge(0.1)) +
+    geom_point(size = 1.5, shape = 21, fill = "white") +
+    labs(y = "", title = vtitle) +
+    theme_bw()
+}
+```
+
+```{r within_by_visit}
+# this function plots the error bars for within-person variance by visit ********
+plot_trend <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  SE_controlled <- summarySEwithin(data, measurevar = fun.y, 
+                                   withinvars = "visit", idvar = "record_id", na.rm = TRUE)
+  
+  SE_controlled$fun.y = unlist(SE_controlled[, fun.y])
+  
+  ggplot(SE_controlled, aes(x = as.numeric(visit), y = fun.y, color = visit)) +
+    geom_line(color = "grey") +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4) +
+    geom_point(size = 2) + 
+    theme_bw(base_size = 12) +
+    xlab("visit") +
+    ylab("score") +
+    ggtitle(vtitle, subtitle = "controlled for between-subject variance") +
+    theme(legend.position = "none")
+}
+```
+
+***
+# 3. Visualize the distribution of test scores
+
+Baseline Only:
+* T1   VRT
+* T9   WCST
+* T10  WTAR
+
+visits 1, 3, 5, 7, 9, 11, 13:
+* T7   MMSE
+* T18  CGI-S
+* T30  Spirituality
+
+all visits:
+* T11  MADRS
+* T12  YMRS
+* T13  GAF
+* T24  PANAS
+* T25  GDS
+* T26  GAD-7
+* T28  FAST-ER
+* T31  GAS
+* T32  PSQI
+
+## **Test 1. VRT** checked
+* Visual Reproduction Test
+* baseline only
+* variables: 3
+
+***
+T1v1.   
+
+### **Immediate Recall**
+```{r vrt-plots-1}
+score_bar(gmdd_long, "vrt_ir_t_score", "Visual Reproduction Test: Immediate Recall (t)", 3)
+score_group(gmdd_long, "vrt_ir_t_score", "Visual Reproduction Test: Immediate Recall (t)", 4, 0.7)
+```
+
+***
+T1v2.
+
+### **Delayed Recall**
+```{r vrt-plots-2}
+score_bar(df_long, "vrt_dr_t_score", "Visual Reproduction Test: Delayed Recall - t", 3)
+score_group(df_long, "vrt_dr_t_score", "Visual Reproduction Test: Delayed Recall - t", 3, 0.7)
+```
+
+***
+T1v3. 
+
+### **Recognition Score**
+```{r vrt-plots-3}
+score_bar(df_long, "vrt_rec_score", "Visual Reproduction Test: Recognition Score")
+score_group(df_long, "vrt_rec_score", "Visual Reproduction Test: Recognition Score", 3, 0.6)
+```
+
+***
+
+## **Test 2. CVLT-II**
+* California Verbal Learning Test  
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 8   
+
+***
+T2v1.
+
+### **Immediate Free Recall**
+```{r cvlt-plots-1-1}
+score_bar(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall (raw)", 3, 0.8)
+score_group(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall (raw) within", 3, 0.4)
+```
+
+```{r cvlt-plots-1-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall (raw)")
+```
+
+```{r cvlt-plots-1-3}
+trend_by_group(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall - by group")
+plot_trend(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall")
+plot_within(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall - by indivodial")
+plot_within_sd(df_long, "cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall - within SD")
+```
+
+***
+T2v2. 
+
+### **Total Intrusions** outliers found
+```{r cvlt-plots-2-1}
+score_bar(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t)", 5)
+score_group(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-2-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t)")
+```
+
+```{r cvlt-plots-2-3}
+plot_within(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t) within")
+plot_trend(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t) trend")
+plot_within_sd(df_long, "cvlt_total_int_t", "CVLT: Total Intrusions (t) within SD")
+```
+
+***
+T2v3.
+
+### **Total Intrusions (Free Recall)** outliers or valid?
+```{r cvlt-plots-3-1}
+score_bar(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t)", 5)
+score_group(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-3-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t)")
+```
+
+```{r cvlt-plots-3-3}
+plot_within(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t) within")
+plot_trend(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t) trend")
+plot_within_sd(df_long, "cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t) within SD")
+```
+
+***
+T2v4.
+
+### **Total Intrusions (Cued Recall)**
+```{r cvlt-plots-4-1}
+score_bar(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t)", 5)
+score_group(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-4-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t)")
+```
+
+```{r cvlt-plots-4-3}
+plot_within(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t) within")
+plot_trend(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t) trend")
+plot_within_sd(df_long, "cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t) within SD")
+```
+
+***
+T2v5. 
+
+### **Total Recognition Target**
+```{r cvlt-plots-5-1}
+score_bar(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t)", 3)
+score_group(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-5-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t)")
+```
+
+```{r cvlt-plots-5-3}
+plot_within(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t) within")
+plot_trend(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t) trend")
+plot_within_sd(df_long, "cvlt_total_rectarget_t", "CVLT: Total Recognition Target (t) within SD")
+```
+
+***
+T2v6. 
+
+### **Total Recognition Intrusions**
+```{r cvlt-plots-6-1}
+score_bar(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t)", 4)
+score_group(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-6-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t)")
+```
+
+```{r cvlt-plots-6-3}
+plot_within(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t) within")
+plot_trend(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t) trend")
+plot_within_sd(df_long, "cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t) within SD")
+```
+
+***
+T2v7. 
+
+### **Total Recognition Accuracy** outliers found
+```{r cvlt-plots-7-1}
+score_bar(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t)", 5)
+score_group(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t)", 2, 0.5)
+```
+
+```{r cvlt-plots-7-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t)")
+```
+
+```{r cvlt-plots-7-3}
+plot_within(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t) within")
+plot_trend(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t) trend")
+plot_within_sd(df_long, "cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t) within SD")
+```
+
+***
+T2v8. 
+
+### **Total Repetition**
+```{r cvlt-plots-8-1}
+score_bar(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition - t ", 5)
+score_group(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition - t ", 2, 0.5)
+```
+
+```{r cvlt-plots-8-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition (t)")
+```
+
+```{r cvlt-plots-8-3}
+plot_within(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition - t - within")
+plot_trend(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition (t) trend")
+plot_within_sd(df_long, "cvlt_total_rep_t", "CVLT: Total Repetition - t - within SD")
+```
+
+***
+
+## **Test 3. VFT**
+* Verbal Fluency Test (aka. FAS)
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 2
+
+***
+T3v1.
+
+### **Animals**
+```{r vft-plots-1-1}
+score_bar(df_long, "vft_animals", "VFT: Animals")
+score_group(df_long, "vft_animals", "VFT: Animals", 2, 0.5)
+```
+
+```{r vft-plots-1-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "vft_animals", "VFT: Animals")
+```
+
+```{r vft-plots-1-3}
+plot_within(df_long, "vft_animals", "VFT: Animals - within")
+plot_trend(df_long, "vft_animals", "VFT: Animals - trend")
+plot_within_sd(df_long, "vft_animals", "VFT: Animals - within SD")
+```
+
+***
+T3v2.
+
+### **FAS**
+```{r vft-plots-2-1}
+score_bar(df_long, "vft_fas_raw", "VFT: FAS (raw)")
+score_group(df_long, "vft_fas_raw", "VFT: FAS (raw)", 2, 0.4)
+```
+
+```{r vft-plots-2-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "vft_fas_raw", "VFT: FAS (raw)")
+```
+
+```{r vft-plots-2-3}
+plot_within(df_long, "vft_fas_raw", "VFT: FAS (raw) - within")
+plot_trend(df_long, "vft_fas_raw", "VFT: FAS (raw) - trend")
+plot_within_sd(df_long, "vft_fas_raw", "VFT: FAS - raw - within SD")
+```
+
+***
+
+## **Test 4. Stroop**
+* Stroop Test
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 4
+
+***
+T4v1.
+
+### **Word Deviation** how to identify valid scores or 0?
+```{r stroop-plots-1-1}
+score_bar(df_long, "stroop_wscore_dev", "Stroop: word deviation")
+score_group(df_long, "stroop_wscore_dev", "Stroop: word deviation", 2, 0.4)
+```
+
+```{r stroop-plots-1-2, fig.width = 7, fig.height = 7}
+score_by_visit(df_long, "stroop_wscore_dev", "Stroop: word deviation")
+```
+
+```{r stroop-plots-1-3}
+plot_within(df_long, "stroop_wscore_dev", "Stroop: word deviation - by individual")
+trend_by_group(df_long, "stroop_wscore_dev", "Stroop: word deviation")
+plot_trend(df_long, "stroop_wscore_dev", "Stroop: word deviation - trend")
+plot_within_sd(df_long, "stroop_wscore_dev", "Stroop: word deviation - within SD")
+```
+
+***
+T4v2.
+
+### **Color Deviation**
+```{r stroop-plots-2}
+score_bar(df_long, "stroop_cscore_dev", "Stroop: color deviation")
+plot_within(df_long, "stroop_cscore_dev", "Stroop: color deviation - within")
+plot_trend(df_long, "stroop_cscore_dev", "Stroop: color deviation - trend")
+plot_within_sd(df_long, "stroop_cscore_dev", "Stroop: color deviation - within SD")
+```
+
+***
+T4v3.
+
+### **Color Word Deviation**
+```{r stroop-plots-3}
+score_bar(df_long, "stroop_cwscore_dev_3", "Stroop: color word deviation")
+plot_within(df_long, "stroop_cwscore_dev_3", "Stroop: color word deviation - within")
+plot_trend(df_long, "stroop_cwscore_dev_3", "Stroop: color word deviation - trend")
+plot_within_sd(df_long, "stroop_cwscore_dev_3", "Stroop: color word deviation - within SD")
+```
+
+***
+T4v4.
+
+### **Color Word**
+```{r stroop-plots-4}
+score_bar(df_long, "strop_cw_int_t", "Stroop: color word (t)")
+plot_within(df_long, "strop_cw_int_t", "Stroop: color word (t) - within")
+plot_trend(df_long, "strop_cw_int_t", "Stroop: color word (t) - trend")
+plot_within_sd(df_long, "strop_cw_int_t", "Stroop: color word (t) - within SD")
+```
+
+***
+
+## **Test 5. Trails A+B ** (data removed from redcap)
+VAR not able to download *****
+
+***
+
+## **Test 6. Coding**
+* Coding and Symbol Search
+* baseline, v5, v9, v13
+* variables: 2
+
+***
+T6v1.
+
+### **Coding t value**
+```{r coding-plots-1}
+score_bar(df_long, "coding_t_score", "Coding")
+plot_within(df_long, "coding_t_score", "Coding - within")
+plot_trend(df_long, "coding_t_score", "Coding - trend")
+plot_within_sd(df_long, "coding_t_score", "Coding - within SD")
+```
+
+***
+T6v2.
+
+### **Symbol Search t value**
+```{r coding-plots-2}
+score_bar(df_long, "symbol_search_t", "Symbol Search")
+plot_within(df_long, "symbol_search_t", "Symbol Search - within")
+plot_trend(df_long, "symbol_search_t", "Symbol Search - trend")
+plot_within_sd(df_long, "symbol_search_t", "Symbol Search - within SD")
+```
+
+***
+T6v3.
+
+### **Coding Score (TMB data)**
+```{r coding-plots-3, eval = FALSE}
+score_bar(df_long, "coding_score", "Coding Score")
+plot_within(df_long, "coding_score", "Coding Score - within")
+plot_trend(df_long, "coding_score", "Coding Score - trend")
+plot_within_sd(df_long, "coding_score", "Coding Score - within SD")
+```
+
+***
+T6v4.
+
+### **Coding Errors (TMB data)**
+```{r coding-plots-4, eval = FALSE}
+score_bar(df_long, "coding_errors", "Coding Errors")
+plot_within(df_long, "coding_errors", "Coding Errors - within")
+plot_trend(df_long, "coding_errors", "Coding Errors - trend")
+plot_within_sd(df_long, "coding_errors", "Coding Errors - within SD")
+```
+
+***
+T6v5.
+
+### **Coding Median RT (TMB data)**
+```{r coding-plots-5, eval = FALSE}
+score_bar(df_long, "coding_medianRT", "Coding Median RT")
+plot_within(df_long, "coding_medianRT", "Coding Median RT - within")
+plot_trend(df_long, "coding_medianRT", "Coding Median RT - trend")
+plot_within_sd(df_long, "coding_medianRT", "Coding Median RT - within SD")
+```
+
+***
+T6v6.
+
+### **Coding sd RT (TMB data)**
+```{r coding-plots-6, eval = FALSE}
+score_bar(df_long, "coding_sdRT", "Coding sd RT")
+plot_within(df_long, "coding_sdRT", "Coding sd RT - within")
+plot_trend(df_long, "coding_sdRT", "Coding sd RT - trend")
+plot_within_sd(df_long, "coding_sdRT", "Coding sd RT - within SD")
+```
+
+***
+T6v7.
+
+### **Coding timeouts (TMB data) ***** NA ******
+
+
+***
+
+## **Test 7. MMSE**
+* Mini-Mental State Exam
+* baseline, v3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T7v1.
+
+### **Total**
+```{r mmse-plots-1}
+score_bar(df_long, "mmse_total_score", "MMSE Total")
+plot_within(df_long, "mmse_total_score", "MMSE Total - within")
+plot_trend(df_long, "mmse_total_score", "MMSE Total - trend")
+plot_within_sd(df_long, "mmse_total_score", "NMMSE Total - within SD")
+```
+
+***
+
+## **Test 8. Emotional Stroop** (data removed from redcap)
+VAR not able to download *****
+note: Not administered in any visit for the majority - why??
+
+***
+
+## **Test 9. WCST** (some data removed from redcap)
+* Wisconsin Card Sort Task
+* baseline
+* variables: 20+
+
+***
+T9v1.
+
+### **Total Error - raw**
+```{r wcst-plots-1}
+score_bar(df_long, "wcst_total_errors_raw", "WCST: Total Error - raw")
+```
+
+***
+T9v2.
+
+### **Total Error STD**
+```{r wcst-plots-2}
+score_bar(df_long, "wcst_total_errors_std", "WCST: Total Error STD")
+```
+
+
+***
+T9v2-2.
+
+### **Total Error STD-2**
+```{r wcst-plots-2-2}
+score_bar(df_long, "wcst_total_errors_std_2", "WCST: Total Error STD-2")
+```
+
+***
+T9v3.
+
+### **Total Error t**
+```{r wcst-plots-3}
+score_bar(df_long, "wcst_total_errors_t", "WCST: Total Error t")
+```
+
+***
+T9v3-2.
+
+### **Total Error t-2**
+```{r wcst-plots-3-2}
+score_bar(df_long, "wcst_total_errors_t_2", "WCST: Total Error t-2")
+```
+
+***
+T9v4.
+
+### **Total Error pct**
+```{r wcst-plots-4}
+score_bar(df_long, "wcst_total_errors_pct", "WCST: Total Error pct")
+```
+
+***
+T9v4-2.
+
+### **Total Error pct-2**
+```{r wcst-plots-4-2}
+score_bar(df_long, "wcst_total_errors_pct_2", "WCST: Total Error pct-2")
+```
+
+***
+T9v5.
+
+### **Perseverative Responses - raw**
+```{r wcst-plots-5}
+score_bar(df_long, "wcst_pers_res_raw", "WCST: Perseverative Responses - raw")
+```
+
+***
+T9v6.
+
+### **Perseverative Responses - STD**
+```{r wcst-plots-6}
+score_bar(df_long, "wcst_pers_res_std", "WCST: Perseverative Responses - std")
+```
+
+***
+T9v6-2.
+
+### **Perseverative Responses - STD-2**
+```{r wcst-plots-6-2}
+score_bar(df_long, "wcst_pers_res_std_2", "WCST: Perseverative Responses - std-2")
+```
+
+***
+T9v7.
+
+### **Perseverative Responses - t**
+```{r wcst-plots-7}
+score_bar(df_long, "wcst_pers_res_t", "WCST: Perseverative Responses - t")
+```
+
+***
+T9v7-2.
+
+### **Perseverative Responses - t-2**
+```{r wcst-plots-7-2}
+score_bar(df_long, "wcst_pers_res_t_2", "WCST: Perseverative Responses - t-2")
+```
+
+***
+T9v8.
+
+### **Perseverative Responses - pct**
+```{r wcst-plots-8}
+score_bar(df_long, "wcst_pers_res_pct", "WCST: Perseverative Responses - pct")
+```
+
+***
+T9v8-2.
+
+### **Perseverative Responses - pct-2**
+```{r wcst-plots-8-2}
+score_bar(df_long, "wcst_pers_res_pct_2", "WCST: Perseverative Responses - pc-2")
+```
+
+***
+T9v9.
+
+### **Perseverative Errors - raw**
+```{r wcst-plots-9}
+score_bar(df_long, "wcst_pers_err_pct", "WCST: Perseverative Errors - raw")
+```
+
+***
+T9v10.
+
+### **Perseverative Errors - STD**
+```{r wcst-plots-10}
+score_bar(df_long, "wcst_pers_err_std", "WCST: Perseverative Errors - std")
+```
+
+***
+T9v10-2.
+
+### **Perseverative Errors - STD-2**
+```{r wcst-plots-10-2}
+score_bar(df_long, "wcst_pers_err_std_2", "WCST: Perseverative Errors - std-2")
+```
+
+***
+T9v11.
+
+### **Perseverative Errors - t**
+```{r wcst-plots-11}
+score_bar(df_long, "wcst_pers_err_t", "WCST: Perseverative Errors - t")
+```
+
+***
+T9v11-2.
+
+### **Perseverative Errors - t-2**
+```{r wcst-plots-11-2}
+score_bar(df_long, "wcst_pers_err_t_2", "WCST: Perseverative Errors - t-2")
+```
+
+***
+T9v12.
+
+### **Perseverative Errors - pct**
+```{r wcst-plots-12}
+score_bar(df_long, "wcst_pers_err_pct", "WCST: Perseverative Errors - pct")
+```
+
+***
+T9v12-2.
+
+### **Perseverative Errors - pct-2**
+```{r wcst-plots-12-2}
+score_bar(df_long, "wcst_pers_err_pct_2", "WCST: Perseverative Errors - pct-2")
+```
+
+***
+T9v13.
+
+### **Non-Perseverative Errors - raw**
+```{r wcst-plots-13}
+score_bar(df_long, "wcst_npers_err_raw", "WCST: Non-Perseverative Errors - raw")
+```
+
+***
+T9v14.
+
+### **Non-Perseverative Errors - std**
+```{r wcst-plots-14}
+score_bar(df_long, "wcst_npers_err_std", "WCST: Non-Perseverative Errors - std")
+```
+
+***
+T9v14-2.
+
+### **Non-Perseverative Errors - std-2**
+```{r wcst-plots-14-2}
+score_bar(df_long, "wcst_npers_err_std_2", "WCST: Non-Perseverative Errors - std-2")
+```
+
+***
+T9v15.
+
+### **Non-Perseverative Errors - t**
+```{r wcst-plots-15}
+score_bar(df_long, "wcst_npers_err_t", "WCST: Non-Perseverative Errors - t")
+```
+
+***
+T9v15-2.
+
+### **Non-Perseverative Errors - t-2**
+```{r wcst-plots-15-2}
+score_bar(df_long, "wcst_npers_err_t_2", "WCST: Non-Perseverative Errors - t-2")
+```
+
+***
+T9v16.
+
+### **Non-Perseverative Errors - pct**
+```{r wcst-plots-16}
+score_bar(df_long, "wcst_npers_err_pct", "WCST: Non-Perseverative Errors - pct")
+```
+
+***
+T9v16-2.
+
+### **Non-Perseverative Errors - pct**
+```{r wcst-plots-16-2}
+score_bar(df_long, "wcst_npers_err_pct_2", "WCST: Non-Perseverative Errors - pct-2")
+```
+
+***
+T9v17.
+
+### **Conceptual Level Responses - raw**
+```{r wcst-plots-17}
+score_bar(df_long, "wcst_conc_raw", "WCST: Conceptual Level Responses - raw")
+```
+
+***
+T9v18.
+
+### **Conceptual Level Responses - std**
+```{r wcst-plots-18}
+score_bar(df_long, "wcst_conc_std", "WCST: Conceptual Level Responses - std")
+```
+
+***
+T9v18-2.
+
+### **Conceptual Level Responses - std-2**
+```{r wcst-plots-18-2}
+score_bar(df_long, "wcst_conc_std_2", "WCST: Conceptual Level Responses - std-2")
+```
+
+***
+T9v19.
+
+### **Conceptual Level Responses - t**
+```{r wcst-plots-19}
+score_bar(df_long, "wcst_conc_t", "WCST: Conceptual Level Responses - t")
+```
+
+***
+T9v19-2.
+
+### **Conceptual Level Responses - t-2**
+```{r wcst-plots-19-2}
+score_bar(df_long, "wcst_conc_t_2", "WCST: Conceptual Level Responses - t-2")
+```
+
+***
+T9v20.
+
+### **Conceptual Level Responses - pct**
+```{r wcst-plots-20}
+score_bar(df_long, "wcst_conc_pct", "WCST: Conceptual Level Responses - pct")
+```
+
+***
+T9v20-2.
+
+### **Conceptual Level Responses - pct-2**
+```{r wcst-plots-20-2}
+score_bar(df_long, "wcst_conc_pct_2", "WCST: Conceptual Level Responses - pct-2")
+```
+
+***
+
+## **Test 10. WTAR**
+* Weschler Test of Adult Reading
+* baseline
+* variables: 1
+
+***
+T10v1.
+
+### **Total**
+```{r wtar-plots-1}
+score_bar(df_long, "wtar_raw_score", "WTAR: Total")
+```
+
+***
+
+## **Test 11. MADRS**
+* Montgomery-Asberg Depression Rating Scale
+* all visits
+* variables: 11
+
+***
+T11v1.
+
+### **Total**
+```{r madrs-plots-1}
+score_bar(df_long, "madrs_total", "MADRS: Total")  
+
+#p1 <- ggplot(df_long, aes(as.numeric(visit), madrs_total, group = record_id, color = record_id)) +
+#    geom_line(alpha = 0.3) +
+#    theme_classic(base_size = 12) +
+#    theme(legend.position = "None") +
+#    ylab("")
+#ggplotly(p1)
+
+plot_within(df_long, "madrs_total", "MADRS: Total - within")
+plot_trend(df_long, "madrs_total", "MADRS: Total - trend")
+plot_within_sd(df_long, "madrs_total", "MADRS: Total - within SD")
+```
+
+***
+T11v2.
+
+### **Apparent Sadness**
+```{r madrs-plots-2}
+score_bar(df_long, "madrs_as_score", "MADRS: Apparent Sadness")
+plot_within(df_long, "madrs_as_score", "MADRS: Apparent Sadness - within")
+plot_trend(df_long, "madrs_as_score", "MADRS: Apparent Sadness - trend")
+plot_within_sd(df_long, "madrs_as_score", "MADRS: Apparent Sadness - within SD")
+```
+
+***
+T11v3.
+
+### **Reported Sadness**
+```{r madrs-plots-3}
+score_bar(df_long, "madrs_rs_score", "MADRS: Reported Sadness")
+plot_within(df_long, "madrs_rs_score", "MADRS: Reported Sadness - within")
+plot_trend(df_long, "madrs_rs_score", "MADRS: Reported Sadness - trend")
+plot_within_sd(df_long, "madrs_rs_score", "MADRS: Reported Sadness - within SD")
+```
+
+***
+T11v4.
+
+### **Inner Tension**
+```{r madrs-plots-4}
+score_bar(df_long, "madrs_it_score", "MADRS: Inner Tension")
+plot_within(df_long, "madrs_it_score", "MADRS: Inner Tension - within")
+plot_trend(df_long, "madrs_it_score", "MADRS: Inner Tension - trend")
+plot_within_sd(df_long, "madrs_it_score", "MADRS: Inner Tension - within SD")
+```
+
+***
+T11v5.
+
+### **Reduced Sleep**
+```{r madrs-plots-5}
+score_bar(df_long, "madrs_rs_score", "MADRS: Reduced Sleep")
+plot_within(df_long, "madrs_rs_score", "MADRS: Reduced Sleep - within")
+plot_trend(df_long, "madrs_rs_score", "MADRS: Reduced Sleep - trend")
+plot_within_sd(df_long, "madrs_rs_score", "MADRS: Reduced Sleep - within SD")
+```
+
+***
+T11v6.
+
+### **Reduced Appetite**
+```{r madrs-plots-6}
+score_bar(df_long, "madrs_ra_score", "MADRS: Reduced Appetite")
+plot_within(df_long, "madrs_ra_score", "MADRS: Reduced Appetite - within")
+plot_trend(df_long, "madrs_ra_score", "MADRS: Reduced Appetite - trend")
+plot_within_sd(df_long, "madrs_ra_score", "MADRS: Reduced Appetite - within SD")
+```
+
+***
+T11v7.
+
+### **Concentration Difficulties**
+```{r madrs-plots-7}
+score_bar(df_long, "madrs_cd_score", "MADRS: Concentration Difficulties")
+plot_within(df_long, "madrs_cd_score", "MADRS: Concentration Difficulties - within")
+plot_trend(df_long, "madrs_cd_score", "MADRS: Concentration Difficulties - trend")
+plot_within_sd(df_long, "madrs_cd_score", "MADRS: Concentration Difficulties - within SD")
+```
+
+***
+T11v8.
+
+### **Lassitude**
+```{r madrs-plots-8}
+score_bar(df_long, "madrs_las_score", "MADRS: Lassitude")
+plot_within(df_long, "madrs_las_score", "MADRS: Lassitude - within")
+plot_trend(df_long, "madrs_las_score", "MADRS: Lassitude - trend")
+plot_within_sd(df_long, "madrs_las_score", "MADRS: Lassitude - within SD")
+```
+
+***
+T11v9.
+
+### **Inability to Feel**
+```{r madrs-plots-9}
+score_bar(df_long, "madrs_itf_score", "MADRS: Inability to Feel")
+plot_within(df_long, "madrs_itf_score", "MADRS: Inability to Feel - within")
+plot_trend(df_long, "madrs_itf_score", "MADRS: Inability to Feel - trend")
+plot_within_sd(df_long, "madrs_itf_score", "MADRS: Inability to Feel - within SD")
+```
+
+***
+T11v10.
+
+### **Pessimistic Thoughts**
+```{r madrs-plots-10}
+score_bar(df_long, "madrs_pt_score", "MADRS: Pessimistic Thoughts")
+plot_within(df_long, "madrs_pt_score", "MADRS: Pessimistic Thoughts - within")
+plot_trend(df_long, "madrs_pt_score", "MADRS: Pessimistic Thoughts - trend")
+plot_within_sd(df_long, "madrs_pt_score", "MADRS: Pessimistic Thoughts - within SD")
+```
+
+***
+T11v11.
+
+### **Suicidal Thoughts**
+```{r madrs-plots-11}
+score_bar(df_long, "madrs_st_score", "MADRS: Suicidal Thoughts")
+plot_within(df_long, "madrs_st_score", "MADRS: Suicidal Thoughts - within")
+plot_trend(df_long, "madrs_st_score", "MADRS: Suicidal Thoughts - trend")
+plot_within_sd(df_long, "madrs_st_score", "MADRS: Suicidal Thoughts - within SD")
+```
+
+
+***
+
+## **Test 12. YMRS**
+* Young Mania Rating Scale
+* all visits
+* variables: 12
+
+***
+T12v1.
+
+### **Total**
+```{r ymrs-plots-1}
+score_bar(df_long, "ymrs_total", "YMRS: Total")  
+plot_within(df_long, "ymrs_total", "YMRS: Total - within")
+plot_trend(df_long, "ymrs_total", "YMRS: Total - trend")
+plot_within_sd(df_long, "ymrs_total", "YMRS: Total - within SD")
+```
+
+***
+T12v2.
+
+### **Elevated Mood**
+```{r ymrs-plots-2}
+score_bar(df_long, "ymrs_elevatedmood", "YMRS: Elevated Mood")  
+plot_within(df_long, "ymrs_elevatedmood", "YMRS: Elevated Mood - within")
+plot_trend(df_long, "ymrs_elevatedmood", "YMRS: Elevated Mood - trend")
+plot_within_sd(df_long, "ymrs_elevatedmood", "YMRS: Elevated Mood - within SD")
+```
+
+***
+T12v3.
+
+### **Motor Activity**
+```{r ymrs-plots-3}
+score_bar(df_long, "ymrs_motoractivity", "YMRS: Motor Activity")  
+plot_within(df_long, "ymrs_motoractivity", "YMRS: Motor Activity - within")
+plot_trend(df_long, "ymrs_motoractivity", "YMRS: Motor Activity - trend")
+plot_within_sd(df_long, "ymrs_motoractivity", "YMRS: Motor Activity - within SD")
+```
+
+***
+T12v4.
+
+### **Sex Interest**
+```{r ymrs-plots-4}
+score_bar(df_long, "ymrs_sexinterest", "YMRS: Sex Interest")  
+plot_within(df_long, "ymrs_sexinterest", "YMRS: Sex Interest - within")
+plot_trend(df_long, "ymrs_sexinterest", "YMRS: Sex Interest - trend")
+plot_within_sd(df_long, "ymrs_sexinterest", "YMRS: Sex Interest - within SD")
+```
+
+***
+T12v5.
+
+### **Sleep**
+```{r ymrs-plots-5}
+score_bar(df_long, "ymrs_sleep", "YMRS: Sleep")  
+plot_within(df_long, "ymrs_sleep", "YMRS: Sleep - within")
+plot_trend(df_long, "ymrs_sleep", "YMRS: Sleep - trend")
+plot_within_sd(df_long, "ymrs_sleep", "YMRS: Sleep - within SD")
+```
+
+***
+T12v6.
+
+### **Irritability**
+```{r ymrs-plots-6}
+score_bar(df_long, "ymrs_irritability", "YMRS: Irritability")  
+plot_within(df_long, "ymrs_irritability", "YMRS: Irritability - within")
+plot_trend(df_long, "ymrs_irritability", "YMRS: Irritability - trend")
+plot_within_sd(df_long, "ymrs_irritability", "YMRS: Irritability - within SD")
+```
+***
+
+T12v7.
+
+### **Speech**
+```{r ymrs-plots-7}
+score_bar(df_long, "ymrs_speech", "YMRS: Speech")  
+plot_within(df_long, "ymrs_speech", "YMRS: Speech - within")
+plot_trend(df_long, "ymrs_speech", "YMRS: Speech - trend")
+plot_within_sd(df_long, "ymrs_speech", "YMRS: Speech - within SD")
+```
+
+***
+T12v8.
+
+### **Language**
+```{r ymrs-plots-8}
+score_bar(df_long, "ymrs_language", "YMRS: Language")  
+plot_within(df_long, "ymrs_language", "YMRS: Language - within")
+plot_trend(df_long, "ymrs_language", "YMRS: Language - trend")
+plot_within_sd(df_long, "ymrs_language", "YMRS: Language - within SD")
+```
+
+***
+T12v9.
+
+### **Content**
+```{r ymrs-plots-9}
+score_bar(df_long, "ymrs_content", "YMRS: Content")  
+plot_within(df_long, "ymrs_content", "YMRS: Content - within")
+plot_trend(df_long, "ymrs_content", "YMRS: Content - trend")
+plot_within_sd(df_long, "ymrs_content", "YMRS: Content - within SD")
+```
+
+***
+T12v10.
+
+### **Disruptive**
+```{r ymrs-plots-10}
+score_bar(df_long, "ymrs_disruptive", "YMRS: Disruptive")  
+plot_within(df_long, "ymrs_disruptive", "YMRS: Disruptive - within")
+plot_trend(df_long, "ymrs_disruptive", "YMRS: Disruptive - trend")
+plot_within_sd(df_long, "ymrs_disruptive", "YMRS: Disruptive - within SD")
+```
+
+***
+T12v11.
+
+### **Appearance**
+```{r ymrs-plots-11}
+score_bar(df_long, "ymrs_appearance", "YMRS: Appearance")  
+plot_within(df_long, "ymrs_appearance", "YMRS: Appearance - within")
+plot_trend(df_long, "ymrs_appearance", "YMRS: Appearance - trend")
+plot_within_sd(df_long, "ymrs_appearance", "YMRS: Appearance - within SD")
+```
+
+***
+T12v12.
+
+### **Insight**
+```{r ymrs-plots-12}
+score_bar(df_long, "ymrs_insight", "YMRS: Insight")  
+plot_within(df_long, "ymrs_insight", "YMRS: Insight - within")
+plot_trend(df_long, "ymrs_insight", "YMRS: Insight - trend")
+plot_within_sd(df_long, "ymrs_insight", "YMRS: Insight - within SD")
+```
+
+***
+
+## **Test 13. GAF**
+* Global Assessment of Functioning
+* all visits
+* variables: 1
+
+***
+T13v1.
+
+### **Score**
+```{r gaf-plots-1}
+score_bar(df_long, "gaf_score", "GAF: Score")  
+plot_within(df_long, "gaf_score", "GAF: Score - within")
+plot_trend(df_long, "gaf_score", "GAF: Score - trend")
+plot_within_sd(df_long, "gaf_score", "GAF: Score - within SD")
+```
+
+***
+
+## **Test 14. IGT**
+* Iowa Gambling Task
+* baseline, 5, 9, 13
+* variables: 11
+
+***
+T14v1.
+
+### **Net Total**
+```{r igt-plots-1}
+score_bar(df_long, "igt_net_total_t", "IGT: Net Total (t)")  
+plot_within(df_long, "igt_net_total_t", "IGT: Net Total (t) - within")
+plot_trend(df_long, "igt_net_total_t", "IGT: Net Total (t) - trend")
+plot_within_sd(df_long, "igt_net_total_t", "IGT: Net Total (t) - within SD")
+```
+
+***
+T14v2.
+
+### **Net part 1 (t value)**
+```{r igt-plots-2}
+score_bar(df_long, "igt_net_1_t", "IGT: Net part 1 (t)")  
+plot_within(df_long, "igt_net_1_t", "IGT: Net part 1 (t) - within")
+plot_trend(df_long, "igt_net_1_t", "IGT: Net part 1 (t) - trend")
+plot_within_sd(df_long, "igt_net_1_t", "IGT: Net part 1 (t) - within SD")
+```
+
+***
+T14v3.
+
+### **Net part 2 (t value)**
+```{r igt-plots-3}
+score_bar(df_long, "igt_net_2_t", "IGT: Net part 2 (t)")  
+plot_within(df_long, "igt_net_2_t", "IGT: Net part 2 (t) - within")
+plot_trend(df_long, "igt_net_2_t", "IGT: Net part 2 (t) - trend")
+plot_within_sd(df_long, "igt_net_2_t", "IGT: Net part 2 (t) - within SD")
+```
+
+***
+T14v4.
+
+### **Net part 3 (t value)**
+```{r igt-plots-4}
+score_bar(df_long, "igt_net_3_t", "IGT: Net part 3 (t)")  
+plot_within(df_long, "igt_net_3_t", "IGT: Net part 3 (t) - within")
+plot_trend(df_long, "igt_net_3_t", "IGT: Net part 3 (t) - trend")
+plot_within_sd(df_long, "igt_net_3_t", "IGT: Net part 3 (t) - within SD")
+```
+
+***
+T14v5.
+
+### **Net part 4 (t value)**
+```{r igt-plots-5}
+score_bar(df_long, "igt_net_4_t", "IGT: Net part 4 (t)")  
+plot_within(df_long, "igt_net_4_t", "IGT: Net part 4 (t) - within")
+plot_trend(df_long, "igt_net_4_t", "IGT: Net part 4 (t) - trend")
+plot_within_sd(df_long, "igt_net_4_t", "IGT: Net part 4 (t) - within SD")
+```
+
+***
+T14v6.
+
+### **Net part 5 (t value)**
+```{r igt-plots-6}
+score_bar(df_long, "igt_net_5_t", "IGT: Net part 5 (t)")  
+plot_within(df_long, "igt_net_5_t", "IGT: Net part 5 (t) - within")
+plot_trend(df_long, "igt_net_5_t", "IGT: Net part 5 (t) - trend")
+plot_within_sd(df_long, "igt_net_5_t", "IGT: Net part 5 (t) - within SD")
+```
+
+***
+T14v7.
+
+### **Deck A**
+```{r igt-plots-7}
+score_bar(df_long, "igt_deck_a", "IGT: Deck A")  
+plot_within(df_long, "igt_deck_a", "IGT: Deck A - within")
+plot_trend(df_long, "igt_deck_a", "IGT: Deck A - trend")
+plot_within_sd(df_long, "igt_deck_a", "IGT: Deck A - within SD")
+```
+
+***
+T14v8.
+
+### **Deck B**
+```{r igt-plots-8}
+score_bar(df_long, "igt_deck_b", "IGT: Deck B")  
+plot_within(df_long, "igt_deck_b", "IGT: Deck B - within")
+plot_trend(df_long, "igt_deck_b", "IGT: Deck B - trend")
+plot_within_sd(df_long, "igt_deck_b", "IGT: Deck B - within SD")
+```
+
+***
+T14v9.
+
+### **Deck C**
+```{r igt-plots-9}
+score_bar(df_long, "igt_deck_c", "IGT: Deck C")  
+plot_within(df_long, "igt_deck_c", "IGT: Deck C - within")
+plot_trend(df_long, "igt_deck_c", "IGT: Deck C - trend")
+plot_within_sd(df_long, "igt_deck_c", "IGT: Deck C - within SD")
+```
+
+***
+T14v10.
+
+### **Deck D**
+```{r igt-plots-10}
+score_bar(df_long, "igt_deck_d", "IGT: Deck D")  
+plot_within(df_long, "igt_deck_d", "IGT: Deck D - within")
+plot_trend(df_long, "igt_deck_d", "IGT: Deck D - trend")
+plot_within_sd(df_long, "igt_deck_d", "IGT: Deck D - within SD")
+```
+
+***
+T14v11.
+
+### **Total money**
+```{r igt-plots-11}
+score_bar(df_long, "igt_total_money", "IGT: Total money")  
+plot_within(df_long, "igt_total_money", "IGT: Total money - within")
+plot_trend(df_long, "igt_total_money", "IGT: Total money - trend")
+plot_within_sd(df_long, "igt_total_money", "IGT: Total money - within SD")
+```
+
+***
+
+## **Test 15. VOSP**
+* Visual Object and Space Perception: Shape Detection
+* baseline, 5, 9, 13
+* variables: 1
+
+***
+T15v1.
+
+### **Total**
+```{r vosp-plots-1}
+score_bar(df_long, "vosp_total", "VOSP: Total")  
+plot_within(df_long, "vosp_total", "VOSP: Total - within")
+plot_trend(df_long, "vosp_total", "VOSP: Total - trend")
+plot_within_sd(df_long, "vosp_total", "VOSP: Total - within SD")
+```
+
+***
+
+## **Test 16. MITE**
+* Mind in the Eyes
+* baseline, 5, 9, 13
+* variables: 2
+
+***
+T16v1.
+
+### **Correct**
+```{r mite-plots-1}
+score_bar(df_long, "mind_eyes_correct", "MITE: Correct")  
+plot_within(df_long, "mind_eyes_correct", "MITE: Correct - within")
+plot_trend(df_long, "mind_eyes_correct", "MITE: Correct - trend")
+plot_within_sd(df_long, "mind_eyes_correct", "MITE: Correct - within SD")
+```
+
+***
+T16v2.
+
+### **t - value**
+```{r mite-plots-2}
+score_bar(df_long, "mind_eyes_t", "MITE: t value")  
+plot_within(df_long, "mind_eyes_t", "MITE: t value - within")
+plot_trend(df_long, "mind_eyes_t", "MITE: t value - trend")
+plot_within_sd(df_long, "mind_eyes_t", "MITE: t value - within SD")
+```
+
+***
+
+## **Test 17. TMB** (not added yet)
+* Test My Brain
+* baseline, 5, 9, 13
+* variables: 4 
+
+***
+T17v1.
+
+### **TMB: Response Speed Score**
+```{r tmb-plots-1, eval=FALSE}
+score_bar(df_long, "response_speed_score", "TMB: Response Speed Score")  
+plot_within(df_long, "response_speed_score", "TMB: Response Speed Score - within")
+plot_trend(df_long, "response_speed_score", "TMB: Response Speed Score - trend")
+plot_within_sd(df_long, "response_speed_score", "TMB: Response Speed Score - within SD")
+```
+
+### **TMB: Response Speed RT**
+```{r tmb-plots-1, eval=FALSE}
+score_bar(df_long, "response_speed_score", "TMB: Response Speed Score")  
+plot_within(df_long, "response_speed_score", "TMB: Response Speed Score - within")
+plot_trend(df_long, "response_speed_score", "TMB: Response Speed Score - trend")
+plot_within_sd(df_long, "response_speed_score", "TMB: Response Speed Score - within SD")
+```
+
+***
+T17v2.
+
+### **TMB: Fast choices**
+```{r tmb-plots-2, eval=FALSE}
+score_bar(df_long, "tmb_fast_choices", "TMB: Fast choices")  
+plot_within(df_long, "tmb_fast_choices", "TMB: Fast choices - within")
+plot_trend(df_long, "tmb_fast_choices", "TMB: Fast choices - trend")
+plot_within_sd(df_long, "tmb_fast_choices", "TMB: Fast choices - within SD")
+```
+
+***
+T17v3.
+
+### **TMB: Matching**
+```{r tmb-plots-3, eval=FALSE}
+score_bar(df_long, "tmb_matching", "TMB: Matching")  
+plot_within(df_long, "tmb_matching", "TMB: Matching - within")
+plot_trend(df_long, "tmb_matching", "TMB: Matching - trend")
+plot_within_sd(df_long, "tmb_matching", "TMB: Matching - within SD")
+```
+
+***
+T17v4.
+
+### **TMB: Difference**
+```{r tmb-plots-4, eval=FALSE}
+score_bar(df_long, "tmb_difference", "TMB: Difference")  
+plot_within(df_long, "tmb_difference", "TMB: Difference - within")
+plot_trend(df_long, "tmb_difference", "TMB: Difference - trend")
+plot_within_sd(df_long, "tmb_difference", "TMB: Difference - within SD")
+```

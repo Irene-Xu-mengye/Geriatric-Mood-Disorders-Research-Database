@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+data/
+data_processing/
+experiment*
+correlations_tmb_gmdd*
+variability_check_gmdd*

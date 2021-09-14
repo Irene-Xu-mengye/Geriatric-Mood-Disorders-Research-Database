@@ -1,0 +1,624 @@
+---
+title: "Variability Check (part 2)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: yeti
+    code_folding: hide
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+# 1. Load packages, Import data, Set style
+```{r, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.width = 5, fig.height = 4)
+
+library(tidyverse)
+library(ggplot2)
+library(Rmisc)
+library(ggpubr)
+
+df_long <- read_csv("data/GMDD_TMB_long_2021-08-17.csv") %>%
+  filter(!(visit %in% c("3t_mri", "4t_mri"))) %>%
+  mutate(visit = as.numeric(visit))
+```
+
+***
+
+# 2. Create functions
+```{r plot_score}
+## this function plots a distribution histogram for each variable ********
+plot_score <- function(data, var, vtitle) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(var)) + 
+    geom_bar() +
+    theme_minimal() +
+    xlab("") +
+    ggtitle(vtitle)
+}
+
+## this function creates a line graph for each individual ****************
+plot_within <- function (data, fun.y, vtitle) {
+  data$fun.y <- data[, fun.y]
+  data$fun.y <- unlist(data$fun.y)
+  ggplot(data, aes(as.numeric(visit), fun.y, group = record_id, color = record_id)) +
+    geom_line(alpha = 0.4) +
+#    geom_point(SIZE = 0.5, alpha = 0.4) +
+    theme_classic(base_size = 12) +
+    theme(legend.position = "None") +
+    labs(title = vtitle)  +
+    ylab("") +
+    xlab("visit")
+}
+
+## this function returns the overall sd for a variable *****************
+sd_all <- function(data, var) {
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd(data$var, na.rm = TRUE)
+}
+
+# this function plots the distribution of within-subject sd for a variable, 
+# and also plots the overall sd ****************************************
+plot_within_sd <- function(data, var, vtitle) {
+  sd_var <- sd_all(data, var)
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd_within_data <- data %>% group_by(record_id) %>% dplyr::summarize(sd = sd(var, na.rm = TRUE))
+  ggplot(sd_within_data, aes(sd)) + geom_density(fill = "lightgrey") +
+    geom_vline(data = data, xintercept = sd_var) +
+    theme_minimal() +
+    ggtitle(vtitle) 
+}
+
+# this function plots the error bars for within-person variance by visit ********
+plot_trend <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  SE_controlled <- summarySEwithin(data, measurevar = fun.y, 
+                                   withinvars = "visit", idvar = "record_id", na.rm = TRUE)
+  
+  SE_controlled$fun.y = unlist(SE_controlled[, fun.y])
+  
+  ggplot(SE_controlled, aes(x = as.numeric(visit), y = fun.y, color = visit)) +
+    geom_line(color = "grey") +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4) +
+    geom_point(size = 2) + 
+    theme_classic(base_size = 12) +
+    xlab("visit") +
+    ylab("score") +
+    ggtitle(vtitle, subtitle = "controlled for between-subject variance") +
+    theme(legend.position = "none")
+}
+```
+
+***
+
+# 3. Visualize the distribution of test scores
+## **Test 18. CGI-S**
+* Clinical Global Impression: Severity
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T18v1.   
+
+### **CGI-S**
+```{r cgis-plots-1}
+plot_score("cgi_s", "CGI-S")
+plot_within(df_long, "cgi_s", "CGI-S - within")
+plot_within_sd(df_long, "cgi_s", "CGI-S - within SD")
+```
+
+***
+
+## **Test 19. CIRS-G**
+* Cumulative Illness Rating Scale - Geriatrics
+* 1, 5, 9, 13
+* variables: 4
+
+***
+T19v1.   
+
+### **CIRS-G: Total**
+```{r cirsg-plots-1}
+plot_score("cirsg_total_score", "CIRS-G: Total")
+plot_within(df_long, "cirsg_total_score", "CIRS-G: Total - within")
+plot_within_sd(df_long, "cirsg_total_score", "CIRS-G: Total - within SD")
+```
+
+***
+T19v2.   
+
+### **CIRS-G: Severity Index**
+```{r cirsg-plots-2}
+plot_score("cirsg_severity_index", "CIRS-G: Severity Index")
+plot_within(df_long, "cirsg_severity_index", "CIRS-G: Severity Index - within")
+plot_within_sd(df_long, "cirsg_severity_index", "CIRS-G: Severity Index - within SD")
+```
+
+***
+T19v3.   
+
+### **CIRS-G: Level 3 severity**
+```{r cirsg-plots-3}
+plot_score("cirsg_level3_severity", "CIRS-G: Level 3 severity")
+plot_within(df_long, "cirsg_level3_severity", "CIRS-G: Level 3 severity - within")
+plot_within_sd(df_long, "cirsg_level3_severity", "CIRS-G: Level 3 severity - within SD")
+```
+
+***
+T19v4.   
+
+### **CIRS-G: Level 4 severity**
+```{r cirsg-plots-4}
+plot_score("cirsg_level4_severity", "CIRS-G: Level 4 severity")
+plot_within(df_long, "cirsg_level4_severity", "CIRS-G: Level 4 severity - within")
+plot_within_sd(df_long, "cirsg_level4_severity", "CIRS-G: Level 4 severity - within SD")
+```
+
+***
+
+## **Test 20. SRFPC**
+* Stroke Risk Factor Prediction Chart
+* 1, 5, 9, 13
+* variables: 1
+
+***
+T20v1.   
+
+### **SRFPC: Total**
+```{r srfpc-plots-1}
+plot_score("srfpc_total", "SRFPC: Total")
+plot_within(df_long, "srfpc_total", "SRFPC: Total - within")
+plot_within_sd(df_long, "srfpc_total", "SRFPC: Total - within SD")
+```
+
+***
+
+## **Test 21. Social Perception**
+* Social Perception
+* 1, 5, 9, 13
+* variables: 3
+
+***
+T21v1.   
+
+### **Social Perception: Affect Naming Total**
+```{r sp-plots-1}
+plot_score("affect_naming_total", "Social Perception: Affect Naming Total")
+plot_within(df_long, "affect_naming_total", "Social Perception: Affect Naming Total - within")
+plot_within_sd(df_long, "affect_naming_total", "Social Perception: Affect Naming Total - within SD")
+```
+
+***
+T21v2.   
+
+### **Social Perception: Affect Naming Scaled**
+```{r sp-plots-2}
+plot_score("affect_naming_scaled", "Social Perception: Affect Naming Scaled")
+plot_within(df_long, "affect_naming_scaled", "Social Perception: Affect Naming Scaled - within")
+plot_within_sd(df_long, "affect_naming_scaled", "Social Perception: Affect Naming Scaled - within SD")
+```
+
+***
+T21v3.   
+
+### **Social Perception: Affect Naming - t value**
+```{r sp-plots-3}
+plot_score("affect_naming_t", "Social Perception: Affect Naming - t value")
+plot_within(df_long, "affect_naming_t", "Social Perception: Affect Naming - t value - within")
+plot_within_sd(df_long, "affect_naming_t", "Social Perception: Affect Naming - t value - within SD")
+```
+
+***
+
+## **Test 22. CERAD Neuropsych Battery**
+* Social Perception
+* 1, 5, 9, 13
+* variables: 4
+
+***
+T22v1.   
+
+### **CERAD:  BNT Boston Naming test Total**
+```{r cerad-plots-1}
+plot_score("cerad_bnt_total", "BNT Total")
+plot_within(df_long, "cerad_bnt_total", "BNT Total - within")
+plot_within_sd(df_long, "cerad_bnt_total", "BNT Total - within SD")
+```
+
+***
+T22v2.   
+
+### **CERAD: Constructional Praxis Total**
+```{r cerad-plots-2}
+plot_score("cerad_cp_total", "Constructional Praxis Total")
+plot_within(df_long, "cerad_cp_total", "Constructional Praxis Total - within")
+plot_within_sd(df_long, "cerad_cp_total", "Constructional Praxis Total - within SD")
+```
+
+***
+T22v3.   
+
+### **CERAD: Word List Recognition Total**
+```{r cerad-plots-3}
+plot_score("cerad_wlrec_total", "Word List Recognition Total")
+plot_within(df_long, "cerad_wlrec_total", "Word List Recognition Total - within")
+plot_within_sd(df_long, "cerad_wlrec_total", "Word List Recognition Total - within SD")
+```
+
+***
+T22v4.   
+
+### **CERAD: Constructional Praxis Recall Total**
+```{r cerad-plots-4}
+plot_score("cerad_cpr_total", "Constructional Praxis Recall Total")
+plot_within(df_long, "cerad_cpr_total", "Constructional Praxis Recall Total - within")
+plot_within_sd(df_long, "cerad_cpr_total", "Constructional Praxis Recall Total - within SD")
+```
+
+*** 
+
+## **Test 23. Go-No Go**
+* Go-No Go
+* 1, 5, 9, 13
+* variables: 2
+
+***
+T23v1.   
+
+### **GNG: Conflict**
+```{r gng-plots-1}
+plot_score("gng_conflict", "GNG: Conflict")
+plot_within(df_long, "gng_conflict", "GNG: Conflict - within")
+plot_within_sd(df_long, "gng_conflict", "GNG: Conflict - within SD")
+```
+
+***
+T23v2.
+
+### **GNG: Inhibit**
+```{r gng-plots-2}
+plot_score("gng_inhibit", "GNG: Inhibit")
+plot_within(df_long, "gng_inhibit", "GNG: Inhibit - within")
+plot_within_sd(df_long, "gng_inhibit", "GNG: Inhibit - within SD")
+```
+
+*** 
+
+## **Test 24. PANAS**
+* Positive And Negative Affect Schedule
+* all visits
+* variables: 2
+
+***
+T24v1.   
+
+### **PANAS: Positive**
+```{r panas-plots-1}
+plot_score("panas_positive", "PANAS: Positive")
+plot_within(df_long, "panas_positive", "PANAS: Positive - within")
+plot_within_sd(df_long, "panas_positive", "PANAS: Positive - within SD")
+```
+
+***
+T24v2.   
+
+### **PANAS: Negative**
+```{r panas-plots-2}
+plot_score("panas_negative", "PANAS: Negative")
+plot_within(df_long, "panas_negative", "PANAS: Negative - within")
+plot_within_sd(df_long, "panas_negative", "PANAS: Negative - within SD")
+```
+
+*** 
+
+## **Test 25. GDS**
+* Geriatric Depression Scale
+* all visits
+* variables: 1
+
+***
+T25v1.   
+
+### **GDS: Total**
+```{r gds-plots-1}
+plot_score("gds_total", "GDS: Total")
+plot_within(df_long, "gds_total", "GDS: Total - within")
+plot_within_sd(df_long, "gds_total", "GDS: Total - within SD")
+```
+
+*** 
+
+## **Test 26. GAD-7**
+* Geriatric Depression Scale
+* all visits
+* variables: 2
+
+***
+T26v1.   
+
+### **GAD-7: Total**
+```{r gad-plots-1}
+plot_score("gad_total", "GAD: Total")
+plot_within(df_long, "gad_total", "GAD: Total - within")
+plot_within_sd(df_long, "gad_total", "GAD: Total - within SD")
+```
+
+***
+T26v2.   
+
+### **GAD-7: Difficulty**
+```{r gad-plots-2}
+plot_score("gad_difficulty", "GAD: Difficulty")
+plot_within(df_long, "gad_difficulty", "GAD: Difficulty - within")
+plot_within_sd(df_long, "gad_difficulty", "GAD: Difficulty - within SD")
+```
+
+*** 
+
+## **Test 27. WHODAS**
+* WHODAS
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T27v1.   
+
+### **WHODAS: sum**
+```{r whodas-plots-1}
+plot_score("whodas_s_sum", "WHODAS: Sum")
+plot_within(df_long, "whodas_s_sum", "WHODAS: Sum - within")
+plot_within_sd(df_long, "whodas_s_sum", "WHODAS: Sum - within SD")
+```
+
+*** 
+
+## **Test 28. FAST-ER**
+* FAST-ER
+* all visits
+* variables: 1
+
+***
+T28v1.   
+
+### **FAST-ER: Total**
+```{r faster-plots-1}
+plot_score("faster_total", "FAST-ER: Total")
+plot_within(df_long, "faster_total", "FAST-ER: Total - within")
+plot_within_sd(df_long, "faster_total", "FAST-ER: Total - within SD")
+```
+
+*** 
+
+## **Test 29. FAS-D**
+* Fatigue Associated with Depression
+* all visits
+* variables: 3
+
+***
+T29v1.   
+
+### **FAS-D: Total **
+```{r fasd-plots-1}
+plot_score("fasd_total", "FAS-D: Total")
+plot_within(df_long, "fasd_total", "FAS-D: Total - within")
+plot_within_sd(df_long, "fasd_total", "FAS-D: Total - within SD")
+```
+
+***
+T29v2.   
+
+### **FAS-D: Total Experience**
+```{r fasd-plots-2}
+plot_score("fasd_total_experience", "FAS-D: Total Experience")
+plot_within(df_long, "fasd_total_experience", "FAS-D: Total Experience - within")
+plot_within_sd(df_long, "fasd_total_experience", "FAS-D: Total Experience - within SD")
+```
+
+***
+T29v3.   
+
+### **FAS-D: Total Impact**
+```{r fasd-plots-3}
+plot_score("fasd_total_impact", "FAS-D: Total Impact")
+plot_within(df_long, "fasd_total_impact", "FAS-D: Total Impact - within")
+plot_within_sd(df_long, "fasd_total_impact", "FAS-D: Total Impact - within SD")
+```
+
+*** 
+
+## **Test 30. Spirituality**
+* Spirituality
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 6
+
+***
+T30v1.   
+
+### **Spirituality I: Total**
+```{r spirituality-plots-1}
+plot_score("spirituality_i_total", "Spirituality I: Total")
+plot_within(df_long, "spirituality_i_total", "Spirituality I: Total - within")
+plot_within_sd(df_long, "spirituality_i_total", "Spirituality I: Total - within SD")
+```
+
+***
+T30v2.   
+
+### **Spirituality II: Trust**
+```{r spirituality-plots-2}
+plot_score("spirituality_ii_trust", "Spirituality II: Trust")
+plot_within(df_long, "spirituality_ii_trust", "Spirituality II: Trust - within")
+plot_within_sd(df_long, "spirituality_ii_trust", "Spirituality II: Trust - within SD")
+```
+
+***
+T30v3.   
+
+### **Spirituality II: Mistrust**
+```{r spirituality-plots-3}
+plot_score("spirituality_ii_mistrust", "Spirituality II: Mistrust")
+plot_within(df_long, "spirituality_ii_mistrust", "Spirituality II: Mistrust - within")
+plot_within_sd(df_long, "spirituality_ii_mistrust", "Spirituality II: Mistrust - within SD")
+```
+
+***
+T30v4.   
+
+### **Spirituality III: Total**
+```{r spirituality-plots-4}
+plot_score("spirituality_iii_total", "Spirituality III: Total")
+plot_within(df_long, "spirituality_iii_total", "Spirituality III: Total - within")
+plot_within_sd(df_long, "spirituality_iii_total", "Spirituality III: Total - within SD")
+```
+
+***
+T30v5.   
+
+### **Spirituality IV: Positive**
+```{r spirituality-plots-5}
+plot_score("spitituality_iv_positive", "Spirituality IV: Positive")
+plot_within(df_long, "spitituality_iv_positive", "Spirituality IV: Positive - within")
+plot_within_sd(df_long, "spitituality_iv_positive", "Spirituality IV: Positive - within SD")
+```
+
+***
+T30v6.   
+
+### **Spirituality IV: Negative**
+```{r spirituality-plots-6}
+plot_score("spitituality_iv_negative", "Spirituality IV: Negative")
+plot_within(df_long, "spitituality_iv_negative", "Spirituality IV: Negative - within")
+plot_within_sd(df_long, "spitituality_iv_negative", "Spirituality IV: Negative - within SD")
+```
+
+*** 
+
+## **Test 31. GAS**
+* Geriatric Anxiety Scale
+* all visits
+* variables: 4
+
+***
+T31v1.   
+
+### **GAS: Total**
+```{r gas-plots-1}
+plot_score("gas_total", "GAS: Total")
+plot_within(df_long, "gas_total", "GAS: Total - within")
+plot_within_sd(df_long, "gas_total", "GAS: Total - within SD")
+```
+
+***
+T31v2.   
+
+### **GAS: Somatic**
+```{r gas-plots-2}
+plot_score("gas_somatic", "GAS: Somatic")
+plot_within(df_long, "gas_somatic", "GAS: Somatic - within")
+plot_within_sd(df_long, "gas_somatic", "GAS: Somatic - within SD")
+```
+
+***
+T31v3.   
+
+### **GAS: Cognitive**
+```{r gas-plots-3}
+plot_score("gas_cognitive", "GAS: Cognitive")
+plot_within(df_long, "gas_cognitive", "GAS: Cognitive - within")
+plot_within_sd(df_long, "gas_cognitive", "GAS: Cognitive - within SD")
+```
+
+***
+T31v4.
+
+### **GAS: Affective**
+```{r gas-plots-4}
+plot_score("gas_affective", "GAS: Affective")
+plot_within(df_long, "gas_affective", "GAS: Affective - within")
+plot_within_sd(df_long, "gas_affective", "GAS: Affective - within SD")
+```
+
+*** 
+
+## **Test 32. PSQI**
+* Pittsburgh Sleep Quality Index
+* all visits
+* variables: 1
+
+***
+T32v1.   
+
+### **PSQI: Total**
+```{r psqi-plots-1}
+plot_score("psqi_global_score", "PSQI: Total")
+plot_within(df_long, "psqi_global_score", "PSQI: Total - within")
+plot_within_sd(df_long, "psqi_global_score", "PSQI: Total - within SD")
+```
+
+*** 
+
+## **Test 33. PAI SCZ**
+* Personality Assessment Psychosis Subscale
+* 1, 5, 9, 13
+* variables: 4
+
+***
+T33v1.   
+
+### **PAI SCZ: Total (t value)**
+```{r paiscz-plots-1}
+plot_score("pai_scz_total_t", "PAI SCZ: Total (t value)")
+plot_within(df_long, "pai_scz_total_t", "PAI SCZ: Total (t value) - within")
+plot_within_sd(df_long, "pai_scz_total_t", "PAI SCZ: Total (t value) - within SD")
+```
+
+***
+T33v2.   
+
+### **PAI SCZ: Psychotic Experiences (t value)**
+```{r paiscz-plots-2}
+plot_score("pai_scz_psychexp_t", "PAI SCZ: Psychotic Experiences (t value)")
+plot_within(df_long, "pai_scz_psychexp_t", "PAI SCZ: Psychotic Experiences (t value) - within")
+plot_within_sd(df_long, "pai_scz_psychexp_t", "PAI SCZ: Psychotic Experiences (t value) - within SD")
+```
+
+***
+T33v3.   
+
+### **PAI SCZ: Thought Disorder (t value)**
+```{r paiscz-plots-3}
+plot_score("pai_scz_thought_t", "PAI SCZ: Thought Disorder (t value)")
+plot_within(df_long, "pai_scz_thought_t", "PAI SCZ: Thought Disorder (t value) - within")
+plot_within_sd(df_long, "pai_scz_thought_t", "PAI SCZ: Thought Disorder (t value) - within SD")
+```
+
+***
+T33v4.   
+
+### **PAI SCZ: Social Detachment (t value)**
+```{r paiscz-plots-4}
+plot_score("pai_scz_social_t", "PAI SCZ: Social Detachment (t value)")
+plot_within(df_long, "pai_scz_social_t", "PAI SCZ: Social Detachment (t value) - within")
+plot_within_sd(df_long, "pai_scz_social_t", "PAI SCZ: Social Detachment (t value) - within SD")
+```
+
+*** 
+
+## **Test 34. MMQ**
+* Multi-factorial Memory Questionnaire
+* 1, 5, 9, 13
+* variables: 1
+
+***
+T34v1.   
+
+### **MMQ: Total**
+```{r mmq-plots-1}
+plot_score("mmq_total", "MMQ: Total")
+plot_within(df_long, "mmq_total", "MMQ: Total - within")
+plot_within_sd(df_long, "mmq_total", "MMQ: Total - within SD")
+```
