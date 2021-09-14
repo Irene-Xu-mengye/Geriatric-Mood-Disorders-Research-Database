@@ -7,4 +7,5 @@ data/
 data_processing/
 experiment*
 correlations_tmb_gmdd*
-variability_check_gmdd*
+variability_check_gmdd.rmd
+variability_check_gmdd.html

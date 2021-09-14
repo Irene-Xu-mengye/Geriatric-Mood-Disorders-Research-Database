@@ -1,0 +1,756 @@
+---
+title: "Variability Check GMDD - part 1"
+author: "Irene Xu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: yeti
+    code_folding: hide
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+
+# 1. Load packages, Import data, Set style
+```{r, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.width = 10, fig.height = 20)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(gridExtra)
+library(Rmisc)
+library(ggpubr)
+library(EnvStats)
+
+df_long <- read_csv("data/GMDD_TMB_long_2021-08-17.csv") %>%
+  filter(!(visit %in% c("3t_mri", "4t_mri"))) %>%
+  mutate(visit = as.numeric(visit))
+```
+
+***
+
+# 2. Create functions
+1. The first function plots a distribution histogram for each variable.
+```{r score_bar}
+score_bar <- function(data, var, vtitle, w = 1, a = 0.8) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = var, fill = arm)) + 
+    geom_histogram(position = 'dodge2', alpha = a, binwidth = w) +
+    theme_minimal() +
+    labs(x = "", title = vtitle)
+}
+```
+
+2. The second function plots the values by group.
+```{r score_by_group}
+score_group <- function(data, var, vtitle, s = 4, a = 0.6) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(x = "", y = "", title = vtitle) +
+    stat_n_text() 
+}
+```
+
+3. The third function plots the values by group for each visit.
+```{r score_by_visit}
+score_by_visit <- function(data, var, vtitle, s = 0.5, a = 0.5) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(title = vtitle, x = "", y = "") +
+    stat_n_text(size = 2.8, vjust = -0.1) +
+    facet_wrap(~visit, scales = "free")
+}
+```
+
+4. The fourth function creates a line graph for each individual.
+```{r plot_within}
+plot_within <- function (data, fun.y, vtitle) {
+  data$fun.y <- data[, fun.y]
+  data$fun.y <- unlist(data$fun.y)
+  ggplot(data, aes(as.numeric(visit), fun.y, group = record_id, color = record_id)) +
+    geom_line(alpha = 0.6) +
+    theme_bw() +
+    theme(legend.position = "None") +
+    labs(title = vtitle, subtitle = "by individial", x = "visit", y = "") +
+    stat_n_text(size = 3, check_overlap = TRUE, angle = 25) 
+}
+```
+
+5. The fifth function plots the mean for each visit for each group.
+```{r trend_by_group}
+trend_by_group <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  summary <- summarySE(data, measurevar = fun.y, groupvars = c("arm", "visit"), na.rm = TRUE)
+  summary$fun.y = unlist(summary[, fun.y])
+  ggplot(summary, aes(x = visit, y = fun.y, color = arm)) +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4)+
+    geom_line(position = position_dodge(-0.2)) +
+    geom_point(size = 1.6, shape = 21, fill = "white", position = position_dodge(-0.2)) +
+    labs(y = "", title = vtitle, subtitle = "by group") +
+    theme_bw()
+}
+```
+
+6. The sixth function plots the error bars for within-person variance by visit.
+```{r within_by_visit}
+plot_trend <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  SE_controlled <- summarySEwithin(data, measurevar = fun.y, 
+                                   withinvars = "visit", idvar = "record_id", na.rm = TRUE)
+  
+  SE_controlled$fun.y = unlist(SE_controlled[, fun.y])
+  
+  ggplot(SE_controlled, aes(x = as.numeric(visit), y = fun.y)) +
+    geom_line(color = "darkgrey") +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4, color = "deepskyblue3") +
+    geom_point(size = 2, shape = 21, color = "deepskyblue3", fill = "deepskyblue3") + 
+    theme_bw(base_size = 12) +
+    xlab("visit") +
+    ylab("score") +
+    ggtitle(vtitle, subtitle = "controlled for between-subject variance") +
+    theme(legend.position = "none")
+}
+```
+
+7. The seventh function takes in a helper function that returns the overall sd for a variable, plots the distribution of within-subject sd and plots the overall sd.
+```{r plot_within_sd}
+sd_all <- function(data, var) {
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd(data$var, na.rm = TRUE)
+}
+
+plot_within_sd <- function(data, var, vtitle) {
+  sd_var <- sd_all(data, var)
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd_within_data <- data %>% group_by(record_id) %>% dplyr::summarize(sd = sd(var, na.rm = TRUE))
+  ggplot(sd_within_data, aes(sd)) + geom_density(color = "deepskyblue4", fill = "deepskyblue4", alpha = 0.7) +
+    geom_vline(data = data, xintercept = sd_var, color = "deepskyblue4") +
+    theme_minimal() +
+    labs(title = vtitle, subtitle = "area: within-person sd\nvertical line: within+between sd") 
+}
+```
+
+8. The eighth function shows all 7 plots for each variable
+```{r master-function}
+plot_all <- function(var, vtitle, p1_width = 1, p1_alpha = 0.8, p2_size = 4, p2_alpha = 0.6, p3_size = 0.5, p3_alpha = 0.5) {
+p1 <- score_bar(df_long, var, vtitle, p1_width, p1_alpha)
+p2 <- score_group(df_long, var, vtitle, p2_size, p2_alpha)
+p3 <- score_by_visit(df_long, var, vtitle, p3_size, p3_alpha)
+p4 <- trend_by_group(df_long, var, vtitle)
+p5 <- plot_trend(df_long, var, vtitle)
+p6 <- plot_within(df_long, var, vtitle)
+p7 <- plot_within_sd(df_long, var, vtitle)
+lay <- rbind(c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2),
+             c(3, 3, 3, 3, 3, 3, 3, 3, 3, NA),
+             c(3, 3, 3, 3, 3, 3, 3, 3, 3, NA),
+             c(4, 4, 4, 4, 4, 5, 5, 5, 5, 5),
+             c(6, 6, 6, 6, 6, 6, 7, 7, 7, 7))
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, layout_matrix = lay)
+}
+```
+
+***
+
+# 3. Visualize the distribution of test scores
+
+## **Test 1. VRT** checked
+* Visual Reproduction Test
+* baseline only
+* variables: 3
+
+T1v1.   
+
+### **Immediate Recall**
+```{r vrt-plots-1, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "vrt_ir_t_score", "Visual Reproduction Test: Immediate Recall (t)", 3)
+score_group(df_long, "vrt_ir_t_score", "Visual Reproduction Test: Immediate Recall (t)", 4, 0.5)
+```
+
+***
+T1v2.
+
+### **Delayed Recall**
+```{r vrt-plots-2, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "vrt_dr_t_score", "Visual Reproduction Test: Delayed Recall (t)", 3)
+score_group(df_long, "vrt_dr_t_score", "Visual Reproduction Test: Delayed Recall (t)", 4, 0.5)
+```
+
+***
+T1v3. 
+
+### **Recognition Score**
+```{r vrt-plots-3, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "vrt_rec_score", "Visual Reproduction Test: Recognition Score")
+score_group(df_long, "vrt_rec_score", "Visual Reproduction Test: Recognition Score", 4, 0.5)
+```
+
+***
+
+## **Test 2. CVLT-II** outliers
+* California Verbal Learning Test  
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 8   
+
+***
+T2v1.
+
+### **Immediate Free Recall**
+```{r cvlt-plots-1 }
+plot_all("cvlt_total_imfree_raw", "CVLT: Total Immediate Free Recall", 3, 0.8, 3, 0.3)
+```
+
+***
+T2v2. 
+
+### **Total Intrusions** 
+```{r cvlt-plots-2 }
+plot_all("cvlt_total_int_t", "CVLT: Total Intrusions", 3, 0.8, 3, 0.3)
+```
+
+***
+T2v3.
+
+### **Total Intrusions (Free Recall)** 
+```{r cvlt-plots-3 }
+plot_all("cvlt_total_free_int_t", "CVLT: Total Intrusions, free (t)", 4, 1, 3, 0.3)
+```
+
+
+***
+T2v4.
+
+### **Total Intrusions (Cued Recall)**
+```{r cvlt-plots-4 }
+df_long <- df_long %>%
+  mutate(cvlt_total_cued_int_t = ifelse(cvlt_total_cued_int_t >= 600, NA, cvlt_total_cued_int_t))
+plot_all("cvlt_total_cued_int_t", "CVLT: Total Intrusions, cued (t)", 4, 0.9, 3, 0.3)
+```
+
+***
+T2v5. 
+
+### **Total Recognition Target**
+```{r cvlt-plots-5 }
+plot_all("cvlt_total_rectarget_t", "CVLT: Total Recognition Target", 3, 0.8, 3, 0.3)
+```
+
+***
+T2v6. 
+
+### **Total Recognition Intrusions**
+```{r cvlt-plots-6 }
+plot_all("cvlt_total_rec_int_t", "CVLT: Total Recognition Intrusions (t)", 3, 0.8, 3, 0.3)
+```
+
+***
+T2v7. 
+
+### **Total Recognition Accuracy** outliers found
+```{r cvlt-plots-7 }
+plot_all("cvlt_total_rec_accuracy", "CVLT: Total Recognition Accuracy (t)", 3, 0.8, 3, 0.3)
+```
+
+***
+T2v8. 
+
+### **Total Repetition**
+```{r cvlt-plots-8 }
+plot_all("cvlt_total_rep_t", "CVLT: Total Repetition - (t)", 3, 0.8, 3, 0.3)
+```
+
+***
+
+## **Test 3. VFT**     
+* Verbal Fluency Test (aka. FAS)
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 2
+
+***
+T3v1.
+
+### **Animals**
+```{r vft-plots-1 }
+plot_all("vft_animals", "VFT: Animals", 1, 0.8, 3, 0.3)
+```
+
+***
+T3v2.
+
+### **FAS**
+```{r vft-plots-2 }
+plot_all("vft_fas_raw", "VFT: FAS (raw)", 2, 0.8, 3, 0.3)
+```
+
+***
+
+## **Test 4. Stroop** Identifiers of valid 0?
+* Stroop Test
+* Mood: 1, 5, 9, 13, 14, 15
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 4
+
+***
+T4v1.
+
+### **Word Deviation** 
+```{r stroop-plots-1 }
+plot_all("stroop_wscore_dev", "Stroop: word deviation", 2, 0.8, 3, 0.3)
+```
+
+***
+T4v2.
+
+### **Color Deviation**
+```{r stroop-plots-2 }
+plot_all("stroop_cscore_dev", "Stroop: color deviation", 2, 0.8, 3, 0.3)
+```
+
+***
+T4v3.
+
+### **Color Word Deviation**
+```{r stroop-plots-3 }
+plot_all("stroop_cwscore_dev_3", "Stroop: color word deviation", 1, 0.8, 3, 0.3)
+```
+
+***
+T4v4.
+
+### **Color Word**
+```{r stroop-plots-4 }
+plot_all("strop_cw_int_t", "Stroop: color word (t)", 1, 0.8, 3, 0.3)
+```
+
+***
+
+## **Test 7. MMSE** outliers? Identifiers of valid 0?
+* Mini-Mental State Exam
+* baseline, v3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T7v1.
+
+### **Total**
+```{r mmse-plots-1 }
+plot_all("mmse_total_score", "MMSE Total", 1, 0.8, 3, 0.2)
+```
+
+***
+
+## **Test 9. WCST** (some data removed from redcap)
+* Wisconsin Card Sort Task
+* baseline
+* variables: 5 included here (some unavailable)
+
+***
+T9v1.
+
+### **Total Error - raw**
+```{r wcst-plots-1, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wcst_total_errors_raw", "WCST: Total Error - raw")
+```
+
+***
+T9v2.
+
+### **Perseverative Responses - raw**
+```{r wcst-plots-2, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wcst_pers_res_raw", "WCST: Perseverative Responses - raw", 3)
+```
+
+***
+T9v3.
+
+### **Perseverative Errors - raw**
+```{r wcst-plots-3, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wcst_pers_err_pct", "WCST: Perseverative Errors - raw", 3)
+```
+
+***
+T9v4.
+
+### **Non-Perseverative Errors - raw**
+```{r wcst-plots-4, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wcst_npers_err_raw", "WCST: Non-Perseverative Errors - raw")
+```
+
+***
+T9v5.
+
+### **Conceptual Level Responses - raw**
+```{r wcst-plots-5, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wcst_conc_raw", "WCST: Conceptual Level Responses - raw", 2)
+```
+
+***
+
+## **Test 10. WTAR** outliers?
+* Weschler Test of Adult Reading
+* baseline
+* variables: 1
+
+***
+T10v1.
+
+### **Total**
+```{r wtar-plots-1, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "wtar_raw_score", "WTAR: Total")
+```
+
+***
+
+## **Test 11. MADRS** Identifiers of valid 0?
+* Montgomery-Asberg Depression Rating Scale
+* all visits
+* variables: 11
+
+***
+T11v1.
+
+### **Total**
+```{r madrs-plots-1 }
+plot_all("madrs_total", "MADRS: Total", 1, 0.8, 2, 0.2)  
+```
+
+***
+T11v2.
+
+### **Apparent Sadness**
+```{r madrs-plots-2 }
+plot_all("madrs_as_score", "MADRS: Apparent Sadness", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v3.
+
+### **Reported Sadness**
+```{r madrs-plots-3 }
+plot_all("madrs_rs_score", "MADRS: Reported Sadness", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v4.
+
+### **Inner Tension**
+```{r madrs-plots-4 }
+plot_all("madrs_it_score", "MADRS: Inner Tension", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v5.
+
+### **Reduced Sleep**
+```{r madrs-plots-5 }
+plot_all("madrs_rs_score", "MADRS: Reduced Sleep", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v6.
+
+### **Reduced Appetite**
+```{r madrs-plots-6 }
+plot_all("madrs_ra_score", "MADRS: Reduced Appetite", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v7.
+
+### **Concentration Difficulties**
+```{r madrs-plots-7 }
+plot_all("madrs_cd_score", "MADRS: Concentration Difficulties", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v8.
+
+### **Lassitude**
+```{r madrs-plots-8 }
+plot_all("madrs_las_score", "MADRS: Lassitude", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v9.
+
+### **Inability to Feel**
+```{r madrs-plots-9 }
+plot_all("madrs_itf_score", "MADRS: Inability to Feel", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v10.
+
+### **Pessimistic Thoughts**
+```{r madrs-plots-10 }
+plot_all("madrs_pt_score", "MADRS: Pessimistic Thoughts", 1, 0.8, 2, 0.2)
+```
+
+***
+T11v11.
+
+### **Suicidal Thoughts**
+```{r madrs-plots-11 }
+plot_all("madrs_st_score", "MADRS: Suicidal Thoughts", 1, 0.8, 2, 0.2)
+```
+
+***
+## **Test 12. YMRS** Identifiers of valid 0?
+* Young Mania Rating Scale
+* all visits
+* variables: 12
+
+***
+T12v1.
+
+### **Total**
+```{r ymrs-plots-1 }
+plot_all("ymrs_total", "YMRS: Total", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v2.
+
+### **Elevated Mood**
+```{r ymrs-plots-2 }
+plot_all("ymrs_elevatedmood", "YMRS: Elevated Mood", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v3.
+
+### **Motor Activity**
+```{r ymrs-plots-3 }
+plot_all("ymrs_motoractivity", "YMRS: Motor Activity", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v4.
+
+### **Sex Interest**
+```{r ymrs-plots-4 }
+plot_all("ymrs_sexinterest", "YMRS: Sex Interest", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v5.
+
+### **Sleep**
+```{r ymrs-plots-5 }
+plot_all("ymrs_sleep", "YMRS: Sleep", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v6.
+
+### **Irritability**
+```{r ymrs-plots-6 }
+plot_all("ymrs_irritability", "YMRS: Irritability", 1, 0.8, 2, 0.2)  
+```
+***
+
+T12v7.
+
+### **Speech**
+```{r ymrs-plots-7 }
+plot_all("ymrs_speech", "YMRS: Speech", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v8.
+
+### **Language**
+```{r ymrs-plots-8 }
+plot_all("ymrs_language", "YMRS: Language", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v9.
+
+### **Content**
+```{r ymrs-plots-9 }
+plot_all("ymrs_content", "YMRS: Content", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v10.
+
+### **Disruptive**
+```{r ymrs-plots-10 }
+plot_all("ymrs_disruptive", "YMRS: Disruptive", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v11.
+
+### **Appearance**
+```{r ymrs-plots-11 }
+plot_all("ymrs_appearance", "YMRS: Appearance", 1, 0.8, 2, 0.2)  
+```
+
+***
+T12v12.
+
+### **Insight**
+```{r ymrs-plots-12 }
+plot_all("ymrs_insight", "YMRS: Insight", 1, 0.8, 2, 0.2)  
+```
+
+***
+## **Test 13. GAF** checked
+* Global Assessment of Functioning
+* all visits
+* variables: 1
+
+***
+T13v1.
+
+### **Score**
+```{r gaf-plots-1, fig.width = 7, fig.height = 4 }
+score_bar(df_long, "gaf_score", "GAF: Score", 2)  
+```
+
+***
+## **Test 14. IGT** checked
+* Iowa Gambling Task
+* baseline, 5, 9, 13
+* variables: 11
+
+***
+T14v1.
+
+### **Net Total**
+```{r igt-plots-1 }
+plot_all("igt_net_total_t", "IGT: Net Total (t)", 2, 0.8, 3, 0.3)  
+```
+
+***
+T14v2.
+
+### **Net part 1 (t value)**
+```{r igt-plots-2 }
+plot_all("igt_net_1_t", "IGT: Net part 1 (t)", 2, 0.8, 3, 0.3)  
+```
+
+***
+T14v3.
+
+### **Net part 2 (t value)**
+```{r igt-plots-3 }
+plot_all("igt_net_2_t", "IGT: Net part 2 (t)", 2, 0.8, 3, 0.3)  
+```
+
+***
+T14v4.
+
+### **Net part 3 (t value)**
+```{r igt-plots-4 }
+plot_all("igt_net_3_t", "IGT: Net part 3 (t)", 1.5, 0.8, 3, 0.3)  
+```
+
+***
+T14v5.
+
+### **Net part 4 (t value)**
+```{r igt-plots-5 }
+plot_all("igt_net_4_t", "IGT: Net part 4 (t)", 1.5, 0.8, 3, 0.3)  
+```
+
+***
+T14v6.
+
+### **Net part 5 (t value)**
+```{r igt-plots-6 }
+plot_all("igt_net_5_t", "IGT: Net part 5 (t)", 1, 0.8, 3, 0.3)  
+```
+
+***
+T14v7.
+
+### **Deck A**
+```{r igt-plots-7 }
+plot_all("igt_deck_a", "IGT: Deck A", 1.5, 0.8, 3, 0.3)  
+```
+
+***
+T14v8.
+
+### **Deck B**
+```{r igt-plots-8 }
+plot_all("igt_deck_b", "IGT: Deck B", 1.5, 0.8, 3, 0.3)  
+```
+
+***
+T14v9.
+
+### **Deck C**
+```{r igt-plots-9 }
+plot_all("igt_deck_c", "IGT: Deck C", 1, 0.8, 3, 0.3)  
+```
+
+***
+T14v10.
+
+### **Deck D**
+```{r igt-plots-10 }
+plot_all("igt_deck_d", "IGT: Deck D", 2, 0.8, 3, 0.3)  
+```
+
+***
+T14v11.
+
+### **Total money**
+```{r igt-plots-11 }  
+plot_all("igt_total_money", "IGT: Total money", 75, 0.8, 3, 0.3)  
+```
+
+***
+
+***
+
+## **Test 15. VOSP** gap?
+* Visual Object and Space Perception: Shape Detection
+* baseline, 5, 9, 13
+* variables: 1
+
+***
+T15v1.
+
+### **Total**
+```{r vosp-plots-1, fig.width = 5, fig.height = 4 }
+score_bar(df_long, "vosp_total", "VOSP: Total")  
+```
+
+***
+
+## **Test 16. MITE** Identifiers of valid 0?
+* Mind in the Eyes
+* baseline, 5, 9, 13
+* variables: 2
+
+***
+T16v1.
+
+### **Correct**
+```{r mite-plots-1 }
+plot_all("mind_eyes_correct", "MITE: Correct", 1, 1, 2.5, 0.25)  
+```
+
+***
+T16v2.
+
+### **t - value**
+```{r mite-plots-2 }
+plot_all("mind_eyes_t", "MITE: t value", 1, 1, 2.5, 0.25)  
+```

@@ -1,0 +1,609 @@
+---
+title: "Variability Check GMDD - part 2"
+author: "Irene Xu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: yeti
+    code_folding: hide
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+# 1. Load packages, Import data, Set style
+```{r, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.width = 10, fig.height = 20)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(gridExtra)
+library(Rmisc)
+library(ggpubr)
+library(EnvStats)
+
+df_long <- read_csv("data/GMDD_TMB_long_2021-08-17.csv") %>%
+  filter(!(visit %in% c("3t_mri", "4t_mri"))) %>%
+  mutate(visit = as.numeric(visit))
+```
+
+***
+
+# 2. Create functions
+1. The first function plots a distribution histogram for each variable.
+```{r score_bar}
+score_bar <- function(data, var, vtitle, w = 1, a = 0.8) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = var, fill = arm)) + 
+    geom_histogram(position = 'dodge2', alpha = a, binwidth = w) +
+    theme_minimal() +
+    labs(x = "", title = vtitle)
+}
+```
+
+2. The second function plots the values by group.
+```{r score_by_group}
+score_group <- function(data, var, vtitle, s = 4, a = 0.6) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(x = "", y = "", title = vtitle) +
+    stat_n_text() 
+}
+```
+
+3. The third function plots the values by group for each visit.
+```{r score_by_visit}
+score_by_visit <- function(data, var, vtitle, s = 0.5, a = 0.5) {
+  data$var <- unlist(data[, var])
+  ggplot(data, aes(x = arm, y = var, color = arm)) + 
+    geom_jitter(size = s, alpha = a) +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(title = vtitle, x = "", y = "") +
+    stat_n_text(size = 2.8, vjust = -0.1) +
+    facet_wrap(~visit, scales = "free")
+}
+```
+
+4. The fourth function creates a line graph for each individual.
+```{r plot_within}
+plot_within <- function (data, fun.y, vtitle) {
+  data$fun.y <- data[, fun.y]
+  data$fun.y <- unlist(data$fun.y)
+  ggplot(data, aes(as.numeric(visit), fun.y, group = record_id, color = record_id)) +
+    geom_line(alpha = 0.6) +
+    theme_bw() +
+    theme(legend.position = "None") +
+    labs(title = vtitle, subtitle = "by individial", x = "visit", y = "") +
+    stat_n_text(size = 3, check_overlap = TRUE, angle = 25) 
+}
+```
+
+5. The fifth function plots the mean for each visit for each group.
+```{r trend_by_group}
+trend_by_group <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  summary <- summarySE(data, measurevar = fun.y, groupvars = c("arm", "visit"), na.rm = TRUE)
+  summary$fun.y = unlist(summary[, fun.y])
+  ggplot(summary, aes(x = visit, y = fun.y, color = arm)) +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4)+
+    geom_line(position = position_dodge(-0.2)) +
+    geom_point(size = 1.6, shape = 21, fill = "white", position = position_dodge(-0.2)) +
+    labs(y = "", title = vtitle, subtitle = "by group") +
+    theme_bw()
+}
+```
+
+6. The sixth function plots the error bars for within-person variance by visit.
+```{r within_by_visit}
+plot_trend <- function(data, fun.y, vtitle) {
+  data$fun.y <- unlist(data[, fun.y])
+  SE_controlled <- summarySEwithin(data, measurevar = fun.y, 
+                                   withinvars = "visit", idvar = "record_id", na.rm = TRUE)
+  
+  SE_controlled$fun.y = unlist(SE_controlled[, fun.y])
+  
+  ggplot(SE_controlled, aes(x = as.numeric(visit), y = fun.y)) +
+    geom_line(color = "darkgrey") +
+    geom_errorbar(aes(ymin = fun.y - se, ymax = fun.y + se), width = 0.4, color = "deepskyblue3") +
+    geom_point(size = 2, shape = 21, color = "deepskyblue3", fill = "deepskyblue3") + 
+    theme_bw(base_size = 12) +
+    xlab("visit") +
+    ylab("score") +
+    ggtitle(vtitle, subtitle = "controlled for between-subject variance") +
+    theme(legend.position = "none")
+}
+```
+
+7. The seventh function takes in a helper function that returns the overall sd for a variable, plots the distribution of within-subject sd and plots the overall sd.
+```{r plot_within_sd}
+sd_all <- function(data, var) {
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd(data$var, na.rm = TRUE)
+}
+
+plot_within_sd <- function(data, var, vtitle) {
+  sd_var <- sd_all(data, var)
+  data$var <- data[, var]
+  data$var <- unlist(data$var)
+  sd_within_data <- data %>% group_by(record_id) %>% dplyr::summarize(sd = sd(var, na.rm = TRUE))
+  ggplot(sd_within_data, aes(sd)) + geom_density(color = "deepskyblue4", fill = "deepskyblue4", alpha = 0.7) +
+    geom_vline(data = data, xintercept = sd_var, color = "deepskyblue4") +
+    theme_minimal() +
+    labs(title = vtitle, subtitle = "area: within-person sd\nvertical line: within+between sd") 
+}
+```
+
+8. The eighth function shows all 7 plots for each variable
+```{r master-function}
+plot_all <- function(var, vtitle, p1_width = 1, p1_alpha = 0.8, p2_size = 4, p2_alpha = 0.6, p3_size = 0.5, p3_alpha = 0.5) {
+p1 <- score_bar(df_long, var, vtitle, p1_width, p1_alpha)
+p2 <- score_group(df_long, var, vtitle, p2_size, p2_alpha)
+p3 <- score_by_visit(df_long, var, vtitle, p3_size, p3_alpha)
+p4 <- trend_by_group(df_long, var, vtitle)
+p5 <- plot_trend(df_long, var, vtitle)
+p6 <- plot_within(df_long, var, vtitle)
+p7 <- plot_within_sd(df_long, var, vtitle)
+lay <- rbind(c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2),
+             c(3, 3, 3, 3, 3, 3, 3, 3, 3, NA),
+             c(3, 3, 3, 3, 3, 3, 3, 3, 3, NA),
+             c(4, 4, 4, 4, 4, 5, 5, 5, 5, 5),
+             c(6, 6, 6, 6, 6, 6, 7, 7, 7, 7))
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, layout_matrix = lay)
+}
+```
+
+***
+
+# 3. Visualize the distribution of test scores
+
+***
+## **Test 18. CGI-S** looks good
+* Clinical Global Impression: Severity
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T18v1.   
+
+### **CGI-S**
+```{r cgis-plots-1 }
+plot_all("cgi_s", "CGI-S", 1, 0.8, 2.5, 0.25)
+```
+
+***
+
+## **Test 19. CIRS-G** Identifiers of valid 0?
+* Cumulative Illness Rating Scale - Geriatrics
+* 1, 5, 9, 13
+* variables: 4
+
+***
+T19v1.   
+
+### **CIRS-G: Total**
+```{r cirsg-plots-1 }
+plot_all("cirsg_total_score", "CIRS-G: Total", 1, 1, 2.5, 0.25)
+```
+
+***
+T19v2.   
+
+### **CIRS-G: Severity Index**
+```{r cirsg-plots-2 }
+plot_all("cirsg_severity_index", "CIRS-G: Severity Index", 1, 0.8, 2.5, 0.25)
+```
+
+***
+T19v3.   
+
+### **CIRS-G: Level 3 severity**
+```{r cirsg-plots-3 }
+plot_all("cirsg_level3_severity", "CIRS-G: Level 3 severity", 1, 0.8, 2.5, 0.25)
+```
+
+***
+T19v4.   
+
+### **CIRS-G: Level 4 severity**
+```{r cirsg-plots-4 }
+plot_all("cirsg_level4_severity", "CIRS-G: Level 4 severity", 1, 0.8, 2, 0.25)
+```
+
+***
+
+## **Test 20. SRFPC** checked
+* Stroke Risk Factor Prediction Chart
+* 1, 5, 9, 13
+* variables: 1
+
+***
+T20v1.   
+
+### **SRFPC: Total**
+```{r srfpc-plots-1 }
+plot_all("srfpc_total", "SRFPC: Total", 1, 0.8, 3, 0.3)
+```
+
+***
+## **Test 21. Social Perception** checked
+* Social Perception
+* Mood: 1, 5, 9, 13, ...
+* Control: 1, 3, 4, 5, 6, 8
+* variables: 3
+
+***
+T21v1.   
+
+### **Social Perception: Affect Naming (Total)**
+```{r sp-plots-1 }
+plot_all("affect_naming_total", "Social Perception: Affect Naming (Total)", 1, 0.9, 3, 0.3)
+```
+
+***
+T21v2.   
+
+### **Social Perception: Affect Naming (Scaled)**
+```{r sp-plots-2 }
+plot_all("affect_naming_scaled", "Social Perception: Affect Naming (Scaled)", 1, 0.9, 3, 0.3)
+```
+
+***
+T21v3.   
+
+### **Social Perception: Affect Naming (t value)**
+```{r sp-plots-3 }
+plot_all("affect_naming_t", "Social Perception: Affect Naming (t value)", 3, 0.9, 3, 0.3)
+```
+
+***
+
+## **Test 22. CERAD Neuropsych Battery (Mood only)** few data?
+* Social Perception
+* 1, 5, 9, 13, ...
+* variables: 4
+
+***
+T22v1.   
+
+### **CERAD:  BNT Boston Naming test Total**
+```{r cerad-plots-1 }
+plot_all("cerad_bnt_total", "BNT Total", 0.8, 0.9, 3, 0.3)
+```
+
+***
+T22v2.   
+
+### **CERAD: Constructional Praxis Total**
+```{r cerad-plots-2 }
+plot_all("cerad_cp_total", "Constructional Praxis Total", 0.8, 0.9, 3, 0.3)
+```
+
+***
+T22v3.   
+
+### **CERAD: Word List Recognition Total**
+```{r cerad-plots-3 }
+plot_all("cerad_wlrec_total", "Word List Recognition Total", 0.8, 0.9, 3, 0.4)
+```
+
+***
+T22v4.   
+
+### **CERAD: Constructional Praxis Recall Total**
+```{r cerad-plots-4 }
+plot_all("cerad_cpr_total", "Constructional Praxis Recall Total", 0.5, 0.9, 3, 0.4)
+```
+
+*** 
+
+## **Test 23. Go-No Go (Mood only)** few data?
+* Go-No Go
+* 1, 5, 9, 13
+* variables: 2 
+* Scoring: 1-More than 2 errors, 2-one to two errors, 3-no error
+
+***
+T23v1.
+
+### **GNG: Conflict**
+```{r gng-plots-1}
+plot_all("gng_conflict", "GNG: Conflict", 1, 0.9, 2.5, 0.3)
+```
+
+***
+T23v2.
+
+### **GNG: Inhibit**
+```{r gng-plots-2}
+plot_all("gng_inhibit", "GNG: Inhibit", 1, 0.9, 2.5, 0.3)
+```
+
+*** 
+## **Test 24. PANAS** checked
+* Positive And Negative Affect Schedule
+* all visits
+* variables: 2
+
+***
+T24v1.   
+
+### **PANAS: Positive**
+```{r panas-plots-1 }
+plot_all("panas_positive", "PANAS: Positive", 1, 0.9, 2.5, 0.3)
+```
+
+***
+T24v2.   
+
+### **PANAS: Negative**
+```{r panas-plots-2 }
+plot_all("panas_negative", "PANAS: Negative", 1, 0.9, 2.5, 0.3)
+```
+
+*** 
+
+## **Test 25. GDS** Identifiers of valid 0?
+* Geriatric Depression Scale
+* all visits
+* variables: 1
+
+***
+T25v1.   
+
+### **GDS: Total** Identifiers of valid 0?
+```{r gds-plots-1 }
+plot_all("gds_total", "GDS: Total", 1, 0.9, 2.5, 0.25)
+```
+
+*** 
+
+## **Test 26. GAD-7** Identifiers of valid 0?
+* Geriatric Depression Scale
+* all visits
+* variables: 2
+
+***
+T26v1.   
+
+### **GAD-7: Total**
+```{r gad-plots-1 }
+plot_all("gad_total", "GAD: Total", 1, 0.9, 2.5, 0.25)
+```
+
+***
+T26v2.   
+
+### **GAD-7: Difficulty**
+```{r gad-plots-2 }
+plot_all("gad_difficulty", "GAD: Difficulty", 1, 0.9, 2.5, 0.25)
+```
+
+*** 
+
+## **Test 27. WHODAS** outlier?
+* WHODAS
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 1
+
+***
+T27v1.   
+
+### **WHODAS: sum**
+```{r whodas-plots-1}
+plot_all("whodas_s_sum", "WHODAS: Sum", 1, 0.8, 2.5, 0.25)
+```
+
+*** 
+
+## **Test 28. FAST-ER** Identifiers of valid 0?
+* FAST-ER
+* all visits
+* variables: 1
+
+***
+T28v1.   
+
+### **FAST-ER: Total**
+```{r faster-plots-1}
+plot_all("faster_total", "FAST-ER: Total", 1.5, 0.9, 2, 0.2)
+```
+
+*** 
+
+## **Test 29. FAS-D** gap?
+* Fatigue Associated with Depression
+* all visits
+* variables: 3
+
+***
+T29v1.   
+
+### **FAS-D: Total **
+```{r fasd-plots-1}
+plot_all("fasd_total", "FAS-D: Total",1, 0.9, 2, 0.2)
+```
+
+***
+T29v2.   
+
+### **FAS-D: Total Experience**
+```{r fasd-plots-2}
+plot_all("fasd_total_experience", "FAS-D: Total Experience",1, 0.9, 2, 0.2)
+```
+
+***
+T29v3.   
+
+### **FAS-D: Total Impact**
+```{r fasd-plots-3}
+plot_all("fasd_total_impact", "FAS-D: Total Impact",1, 0.9, 2, 0.25)
+```
+
+*** 
+
+## **Test 30. Spirituality** outliers?
+* Spirituality
+* 1, 3, 5, 7, 9, 11, 13
+* variables: 6
+
+***
+T30v1.   
+
+### **Spirituality I: Total**
+```{r spirituality-plots-1}
+plot_all("spirituality_i_total", "Spirituality I: Total", 1, 0.9, 2, 0.3)
+```
+
+***
+T30v2.   
+
+### **Spirituality II: Trust**
+```{r spirituality-plots-2}
+plot_all("spirituality_ii_trust", "Spirituality II: Trust", 1, 0.9, 2, 0.3)
+```
+
+***
+T30v3.   
+
+### **Spirituality II: Mistrust**
+```{r spirituality-plots-3}
+plot_all("spirituality_ii_mistrust", "Spirituality II: Mistrust", 1, 0.9, 2, 0.3)
+```
+
+***
+T30v4.   
+
+### **Spirituality III: Total**
+```{r spirituality-plots-4}
+plot_all("spirituality_iii_total", "Spirituality III: Total", 1, 0.9, 2, 0.3)
+```
+
+***
+T30v5.   
+
+### **Spirituality IV: Positive**
+```{r spirituality-plots-5}
+plot_all("spitituality_iv_positive", "Spirituality IV: Positive", 1, 0.9, 2, 0.3)
+```
+
+***
+T30v6.   
+
+### **Spirituality IV: Negative**
+```{r spirituality-plots-6}
+plot_all("spitituality_iv_negative", "Spirituality IV: Negative", 1, 0.9, 2, 0.3)
+```
+
+***
+
+## **Test 31. GAS** Identifiers of valid 0?
+* Geriatric Anxiety Scale
+* all visits
+* variables: 4
+
+***
+T31v1.   
+
+### **GAS: Total**
+```{r gas-plots-1}
+plot_all("gas_total", "GAS: Total", 1, 0.9, 2, 0.2)
+```
+
+***
+T31v2.   
+
+### **GAS: Somatic**
+```{r gas-plots-2}
+plot_all("gas_somatic", "GAS: Somatic", 1, 0.9, 2, 0.2)
+```
+
+***
+T31v3.   
+
+### **GAS: Cognitive**
+```{r gas-plots-3}
+plot_all("gas_cognitive", "GAS: Cognitive", 1, 0.9, 2, 0.2)
+```
+
+***
+T31v4.
+
+### **GAS: Affective**
+```{r gas-plots-4}
+plot_all("gas_affective", "GAS: Affective", 1, 0.9, 2, 0.2)
+```
+
+*** 
+
+## **Test 32. PSQI** cluster? Identifiers of valid 0?
+* Pittsburgh Sleep Quality Index
+* all visits
+* variables: 1
+
+***
+T32v1.   
+
+### **PSQI: Total**
+```{r psqi-plots-1}
+plot_all("psqi_global_score", "PSQI: Total", 1, 0.9, 2, 0.2)
+```
+
+*** 
+
+## **Test 33. PAI SCZ** checked
+* Personality Assessment Psychosis Subscale
+* 1, 5, 9, 13
+* variables: 4
+
+***
+T33v1.   
+
+### **PAI SCZ: Total (t value)**
+```{r paiscz-plots-1}
+plot_all("pai_scz_total_t", "PAI SCZ: Total (t value)", 2, 0.9, 2.8, 0.25)
+```
+
+***
+T33v2.   
+
+### **PAI SCZ: Psychotic Experiences (t value)**
+```{r paiscz-plots-2}
+plot_all("pai_scz_psychexp_t", "PAI SCZ: Psychotic Experiences (t value)", 3, 0.9, 2.5, 0.25)
+```
+
+***
+T33v3.   
+
+### **PAI SCZ: Thought Disorder (t value)**
+```{r paiscz-plots-3}
+plot_all("pai_scz_thought_t", "PAI SCZ: Thought Disorder (t value)", 3, 0.9, 3, 0.3)
+```
+
+***
+T33v4.   
+
+### **PAI SCZ: Social Detachment (t value)**
+```{r paiscz-plots-4}
+plot_all("pai_scz_social_t", "PAI SCZ: Social Detachment (t value)", 3, 0.9, 3, 0.3)
+```
+
+*** 
+
+## **Test 34. MMQ** gap?
+* Multi-factorial Memory Questionnaire
+* 1, 5, 9, 13
+* variables: 1
+
+***
+T34v1.   
+
+### **MMQ: Total**
+```{r mmq-plots-1}
+plot_all("mmq_total", "MMQ: Total", 2, 0.9, 2.5, 0.25)
+```
